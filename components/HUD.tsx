@@ -4,11 +4,10 @@ import { useEffect, useState } from "react";
 import { useCowStore } from "@/lib/store";
 import { onPointerLockChange } from "@/lib/input";
 import { useIsTouch } from "@/lib/useIsTouch";
-import { enterImmersive, exitImmersive, useIsFullscreen, useIsPortrait } from "@/lib/viewport";
-import { SLAPS_BEFORE_POLICE } from "@/lib/world";
+import { useIsFullscreen, useIsPortrait } from "@/lib/viewport";
 import RotateHint from "./RotateHint";
 import TicketCard from "./TicketCard";
-import { Finale, GoalList, GoalToast } from "./Progress";
+import { MenuCluster } from "./MenuCluster";
 
 export default function HUD() {
   const started = useCowStore((s) => s.started);
@@ -17,7 +16,6 @@ export default function HUD() {
   const prompt = useCowStore((s) => s.prompt);
   const inCutscene = useCowStore((s) => s.inCutscene);
   const activeGag = useCowStore((s) => s.activeGag);
-  const slapCount = useCowStore((s) => s.slapCount);
   const flashSeq = useCowStore((s) => s.flashSeq);
   const triggerGag = useCowStore((s) => s.triggerGag);
   const toggleDance = useCowStore((s) => s.toggleDance);
@@ -49,8 +47,6 @@ export default function HUD() {
         <div key={flashSeq} className="cam-flash absolute -inset-8 bg-white" />
       )}
 
-      <GoalList touch={touch} />
-      <GoalToast />
       <TicketCard touch={touch} />
 
       {/* speech bubble — labelled, because two of them talk at the station */}
@@ -66,42 +62,22 @@ export default function HUD() {
             }`}
           >
             <span className="shrink-0 text-xl sm:text-2xl">
-              {speaker === "officer" ? "👮" : "🐄"}
+              {speaker === "officer" ? "👮" : speaker === "bull" ? "🐂" : speaker === "loo" ? "🚽" : "🐄"}
             </span>
             <span>{dialogue}</span>
           </div>
         )}
       </div>
 
-      {/* How close the cow is to walking off to file a report.
-
-          On a phone this moves up out of the thumb zone entirely. It used to
-          sit between the stick and the buttons, where it was both in the way
-          and too small to read against the field. */}
-      <div
-        className={`absolute flex items-center gap-1.5 ${
-          touch ? "top-3 right-3" : "inset-x-0 bottom-3 justify-center"
-        }`}
-      >
-        {Array.from({ length: SLAPS_BEFORE_POLICE }).map((_, i) => (
-          <span
-            key={i}
-            className={`rounded-full transition-colors ${touch ? "h-1.5 w-5" : "h-2 w-7"} ${
-              i < slapCount ? "bg-red-500" : "bg-white/45"
-            }`}
-          />
-        ))}
-      </div>
-
-      {touch && <ScreenButton fullscreen={fullscreen} />}
+      <MenuCluster touch={touch} />
 
       {/* The game holds the mouse by default; this only shows once you've taken
           it back with Esc, to say how to hand it over again. */}
       {!touch && !locked && (
         // High enough that it never lands on the contextual button below it,
         // which now appears for the gate and the pond as well as for grass.
-        <div className="absolute inset-x-0 top-[62%] flex justify-center px-4">
-          <div className="rounded-full bg-black/45 px-5 py-2.5 text-sm font-medium text-white/95 shadow-lg backdrop-blur-sm">
+        <div className="absolute inset-x-0 top-16 flex justify-center px-4">
+          <div className="rounded-full bg-black/45 px-4 py-1.5 text-xs font-medium text-white/90 shadow-lg backdrop-blur-sm">
             Click the field to look with the mouse · Esc frees the cursor
           </div>
         </div>
@@ -174,8 +150,6 @@ export default function HUD() {
         />
       </div>
 
-      <Finale />
-
       {touch ? (
         <TouchHints portrait={portrait} fullscreen={fullscreen} />
       ) : (
@@ -183,29 +157,10 @@ export default function HUD() {
           className="hint-fade absolute bottom-4 left-4 hidden rounded-xl bg-black/35 px-3 py-2 text-xs leading-relaxed text-white/90 sm:block"
           style={{ "--hint-ms": "14000ms" } as React.CSSProperties}
         >
-          <div><b>WASD</b> walk · <b>Shift</b> gallop · <b>mouse</b> look · <b>scroll</b> zoom</div>
+          <div><b>WASD</b> walk · <b>Shift</b> gallop · <b>mouse</b> look · <b>H</b> all controls</div>
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * Fullscreen toggle.
- *
- * Worth having even though the title card already asked once: people swipe out
- * of fullscreen by accident, and on a phone it is the difference between
- * playing on the whole screen and playing on two thirds of one.
- */
-function ScreenButton({ fullscreen }: { fullscreen: boolean }) {
-  return (
-    <button
-      onClick={() => void (fullscreen ? exitImmersive() : enterImmersive())}
-      aria-label={fullscreen ? "Leave fullscreen" : "Go fullscreen"}
-      className="pointer-events-auto absolute top-8 right-3 grid h-9 w-9 place-items-center rounded-full bg-black/35 text-base text-white/85 backdrop-blur-sm active:scale-95"
-    >
-      {fullscreen ? "⤫" : "⛶"}
-    </button>
   );
 }
 

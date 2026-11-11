@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // page-injected test snippets and tool files, not app code
+    "scripts/playtest/**",
+    ".trail/**",
   ]),
 ]);
 

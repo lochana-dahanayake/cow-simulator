@@ -3,37 +3,32 @@ import {
   bonk,
   chew,
   creak,
-  ding,
   ensureAudio,
-  fanfare,
+  isMuted,
+  setMuted,
   grunt,
   kaching,
   kissJingle,
+  knock,
   moo,
+  rustle,
+  snort,
   shutter,
   slurp,
   smack,
 } from "./audio";
-import {
-  bellowLines,
-  bonkLines,
-  danceLines,
-  gags,
-  insultLines,
-  KISS_CONTACT,
-  LIP_MARK_DURATION,
-  SLAP_IMPACT,
-  ticketLines,
-} from "./reactions";
-import { GOALS, loadGoals, saveGoals, type GoalId } from "./goals";
+import { currentDance, startDance } from "./mocap";
+import { infoFor } from "./danceInfo";
+import { gags, KISS_CONTACT, LIP_MARK_DURATION, pick, pickLine, SLAP_IMPACT, type LinePool } from "./reactions";
+import { loadGoals, saveGoals, type GoalId } from "./goals";
 import { noteInput } from "./input";
 import { kissImpulse, slapImpulse } from "./physics";
-import { addShake } from "./camera";
+import { addShake, cam } from "./camera";
 import { cowState } from "./cowState";
 import { GRASS, REGROW_MS, SLAPS_BEFORE_POLICE, SPEED_LIMIT, MPH, SPEED_TRAP_COOLDOWN } from "./world";
 import type { Speaker } from "./cutscene";
 
-export type GagId = "eat" | "shy" | "slap" | "bellow" | "sip" | "dance" | "bonk";
+export type GagId = "eat" | "shy" | "slap" | "bellow" | "sip" | "dance" | "bonk" | "knock";
 
 /** One photograph from the speed camera, and what it cost. */
 export interface Ticket {
@@ -60,7 +55,7 @@ export const POSTED_LIMIT = Math.floor(SPEED_LIMIT * MPH);
  * kind. Adding an interactable is one case here and one entry in
  * `nearestPrompt()` in components/Cow.tsx.
  */
-export type PromptKind = "grass" | "gate" | "scarecrow" | "pond" | "officer";
+export type PromptKind = "grass" | "gate" | "scarecrow" | "pond" | "officer" | "bull" | "loo" | "apple";
 
 export interface Prompt {
   kind: PromptKind;
@@ -101,6 +96,12 @@ export interface CowStore {
   scareSeq: number;
   /** Bumped when the speed camera fires, so the screen can flash. */
   flashSeq: number;
+  /** Bumped every time the cow moos at the bull. He notices. He does not care. */
+  bullSeq: number;
+  /** How many times the portaloo door has been headbutted. The third one works. */
+  looSeq: number;
+  /** Bumped when the apple tree is shaken, so an apple can come down. */
+  shakeSeq: number;
   /**
    * When the slapping hand started its swing, as `performance.now()`. A
    * timestamp rather than a flag, so a second slap restarts the swing from the
@@ -120,14 +121,12 @@ export interface CowStore {
   ticketShown: number | null;
   /** What has been ticked off the to-do list, and when. Survives a reload. */
   done: Partial<Record<GoalId, number>>;
-  /** The most recent tick, for the toast. Bumped seq replays the animation. */
-  toast: { id: GoalId; seq: number } | null;
   /** Mid-conversation with the officer, so E does not start another one. */
   chatting: boolean;
-  /** Whether the to-do list is open. */
-  listOpen: boolean;
-  /** Everything ticked off: the ending card is up. */
-  finale: boolean;
+  /** Sound off. Mirrors lib/audio.ts, which is what actually silences it. */
+  muted: boolean;
+  /** The controls card is open. */
+  helpOpen: boolean;
   /** Running totals for the ending card. */
   stats: { slaps: number; bonks: number; sheep: number; kisses: number; startedAt: number; endedAt: number };
 
@@ -143,12 +142,13 @@ export interface CowStore {
   fileTicket: (photo: string) => void;
   dismissTicket: () => void;
   complete: (id: GoalId) => void;
-  toggleList: (open?: boolean) => void;
+  toggleMute: () => void;
+  toggleHelp: (open?: boolean) => void;
   chat: () => void;
   /** Say something about being stared at, if nothing else is being said. */
   stare: (line: string) => void;
-  closeFinale: () => void;
-  resetGoals: () => void;
+  /** A passing remark from a pool, if the cow is not busy saying something else. */
+  quip: (pool: LinePool) => void;
   bumpStat: (key: "bonks" | "sheep") => void;
   triggerGag: (id: GagId) => void;
   toggleDance: () => void;
@@ -157,7 +157,6 @@ export interface CowStore {
 }
 
 let timeouts: ReturnType<typeof setTimeout>[] = [];
-const lastLine: Record<string, number> = {};
 
 function clearScheduled() {
   timeouts.forEach(clearTimeout);
@@ -188,32 +187,26 @@ const OFFICER_CHAT: [string, string][] = [
   ["Nice hat.", "...Thank you. Moving on."],
   ["Any news on my case?", "We're looking into it. Very slowly."],
   ["Can I have a bit of that doughnut?", "Absolutely not."],
+  ["Do you take statements from cows?", "I take statements from anybody. I just don't read them."],
+  ["Have you seen a big hand round here?", "Sir, this is a police station."],
+  ["Moo.", "...Moo yourself."],
+  ["What would you do if I ran?", "Write it down. Slowly."],
+  ["Is the camera on the lane yours?", "It's the Council's. I just cash the hay."],
+  ["Nice day for it.", "For what?"],
 ];
-let chatIndex = 0;
 
 /** When the speed camera last fired, so it is one ticket per pass, not per frame. */
 let lastFlash = -Infinity;
 
-const POOLS = {
-  insult: insultLines,
-  bellow: bellowLines,
-  dance: danceLines,
-  bonk: bonkLines,
-  ticket: ticketLines,
-};
 
-/** A line from a pool, never the same one twice running. */
-function pickLine(pool: keyof typeof POOLS): string {
-  const lines = POOLS[pool];
-  let i = Math.floor(Math.random() * lines.length);
-  if (lines.length > 1) {
-    while (i === lastLine[pool]) i = Math.floor(Math.random() * lines.length);
-  }
-  lastLine[pool] = i;
-  return lines[i];
-}
+const sounds = { smack, moo, chew, kiss: kissJingle, grunt, creak, slurp, bonk, knock };
 
-const sounds = { smack, moo, chew, kiss: kissJingle, grunt, creak, slurp, bonk };
+/**
+ * What the cow is currently mooing at or knocking on. A bellow and a headbutt
+ * are each one gag used on several things, so the gag's script says WHEN it
+ * lands and this says on WHAT.
+ */
+let target: PromptKind = "scarecrow";
 
 /** Which gag ticks which box. */
 const GAG_GOALS: Partial<Record<GagId, GoalId>> = {
@@ -226,7 +219,9 @@ const GAG_GOALS: Partial<Record<GagId, GoalId>> = {
 
 export const useCowStore = create<CowStore>((set, get) => {
   if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
-    (window as unknown as { __cowStore?: unknown }).__cowStore = () => get();
+    (window as unknown as { __cowStore?: unknown; __cow?: unknown }).__cowStore = () => get();
+    (window as unknown as { __cow?: unknown; __cam?: unknown }).__cow = cowState;
+    (window as unknown as { __cam?: unknown }).__cam = cam;
   }
   return {
     started: false,
@@ -242,16 +237,18 @@ export const useCowStore = create<CowStore>((set, get) => {
     gateOpen: false,
     scareSeq: 0,
     flashSeq: 0,
+    bullSeq: 0,
+    looSeq: 0,
+    shakeSeq: 0,
     grassEatenAt: GRASS.map(() => null),
     nearGrass: null,
     prompt: null,
     tickets: [],
     ticketShown: null,
     done: loadGoals(),
-    toast: null,
-    listOpen: false,
+    muted: false,
+    helpOpen: false,
     chatting: false,
-    finale: false,
     stats: { slaps: 0, bonks: 0, sheep: 0, kisses: 0, startedAt: 0, endedAt: 0 },
 
     // The tap on the title card. Audio is unlocked here and nowhere else that
@@ -260,11 +257,7 @@ export const useCowStore = create<CowStore>((set, get) => {
       if (get().started) return;
       ensureAudio();
       noteInput();
-      set({ started: true, stats: { ...get().stats, startedAt: performance.now() } });
-      // Show the list once, on the way in, so a first-time player knows there
-      // IS one — then fold it away to the corner.
-      later("peek", 1400, () => set({ listOpen: true }));
-      later("unpeek", 8200, () => set({ listOpen: false }));
+      set({ muted: isMuted(), started: true, stats: { ...get().stats, startedAt: performance.now() } });
     },
 
     say: (line, speaker = "cow") => set({ dialogue: line, speaker }),
@@ -313,8 +306,60 @@ export const useCowStore = create<CowStore>((set, get) => {
           set({ gateOpen: !s.gateOpen, prompt: null });
           return;
         case "scarecrow":
+          target = "scarecrow";
           get().triggerGag("bellow");
           return;
+        case "bull": {
+          target = "bull";
+          get().triggerGag("bellow");
+          // He answers once the cow has finished shouting — if you can call it
+          // an answer.
+          const reply = pickLine("bullSays");
+          later("reply", gags.bellow.duration + 250, () => {
+            const cur = get();
+            if (cur.activeGag || cur.inCutscene) return;
+            snort();
+            set({ dialogue: reply, speaker: "bull" });
+            later("reply-clear", 2400, () => {
+              if (get().dialogue === reply) set({ dialogue: null });
+            });
+          });
+          return;
+        }
+        case "loo": {
+          // Once the occupant has left there is nothing to knock for.
+          if (s.looSeq >= 3) {
+            get().quip("looFree");
+            return;
+          }
+          target = "loo";
+          const n = s.looSeq + 1;
+          get().triggerGag("knock");
+          const reply = n >= 3 ? "FINE! I'M COMING OUT!" : pickLine("looSays");
+          later("reply", gags.knock.duration + 60, () => {
+            if (get().activeGag || get().inCutscene) return;
+            set({ dialogue: reply, speaker: "loo" });
+            later("reply-clear", 2300, () => {
+              if (get().dialogue === reply) set({ dialogue: null });
+            });
+          });
+          return;
+        }
+        case "apple": {
+          target = "apple";
+          get().triggerGag("knock");
+          // The apple is in the air for about half a second after the second
+          // headbutt; the stars start when it arrives.
+          later("apple-lands", gags.knock.duration + 30, () => {
+            if (get().activeGag || get().inCutscene) return;
+            get().triggerGag("bonk");
+            const line = pickLine("apple");
+            later("apple-line", 760, () => {
+              if (get().activeGag === "bonk") set({ dialogue: line, speaker: "cow" });
+            });
+          });
+          return;
+        }
         case "pond":
           get().triggerGag("sip");
           return;
@@ -331,13 +376,23 @@ export const useCowStore = create<CowStore>((set, get) => {
     chat: () => {
       const s = get();
       if (s.chatting) return;
-      const [cowLine, copLine] = OFFICER_CHAT[chatIndex++ % OFFICER_CHAT.length];
+      const [cowLine, copLine] = pick("chat", OFFICER_CHAT);
       set({ chatting: true, dialogue: cowLine, speaker: "cow" });
       moo();
       later("chat-1", 1900, () => set({ dialogue: copLine, speaker: "officer" }));
       later("chat-2", 1900 + 2600, () => {
         if (get().dialogue === copLine) set({ dialogue: null });
         set({ chatting: false });
+      });
+    },
+
+    quip: (pool) => {
+      const s = get();
+      if (!s.started || s.activeGag || s.inCutscene || s.chatting) return;
+      const line = pickLine(pool);
+      set({ dialogue: line, speaker: "cow" });
+      later("quip", 2600, () => {
+        if (get().dialogue === line) set({ dialogue: null });
       });
     },
 
@@ -406,27 +461,16 @@ export const useCowStore = create<CowStore>((set, get) => {
       if (s.done[id]) return;
       const done = { ...s.done, [id]: Date.now() };
       saveGoals(done);
-      ding();
-      set({ done, toast: { id, seq: (s.toast?.seq ?? 0) + 1 } });
-      later("toast", 3600, () => set({ toast: null }));
-      if (GOALS.every((g) => done[g.id])) {
-        later("finale", 2600, () => {
-          fanfare();
-          set({ finale: true, listOpen: false, stats: { ...get().stats, endedAt: performance.now() } });
-          // the cow knows what to do
-          if (!get().activeGag && !get().inCutscene) get().toggleDance();
-        });
-      }
+      set({ done });
     },
 
-    toggleList: (open) => set({ listOpen: open ?? !get().listOpen }),
-
-    closeFinale: () => set({ finale: false }),
-
-    resetGoals: () => {
-      saveGoals({});
-      set({ done: {}, finale: false, toast: null });
+    toggleMute: () => {
+      const m = !get().muted;
+      setMuted(m);
+      set({ muted: m });
     },
+
+    toggleHelp: (open) => set({ helpOpen: open ?? !get().helpOpen }),
 
     bumpStat: (key) => set({ stats: { ...get().stats, [key]: get().stats[key] + 1 } }),
 
@@ -436,6 +480,8 @@ export const useCowStore = create<CowStore>((set, get) => {
       clearScheduled();
 
       const gag = gags[id];
+      // A dance runs as long as the clip that was picked for it.
+      const duration = id === "dance" ? startDance() || gag.duration : gag.duration;
       const slapCount = id === "slap" ? get().slapCount + 1 : get().slapCount;
       if (id === "slap") set({ stats: { ...get().stats, slaps: get().stats.slaps + 1 } });
 
@@ -480,7 +526,7 @@ export const useCowStore = create<CowStore>((set, get) => {
       // Boxes on the list. A gag ticks its box when its payoff lands rather
       // than when the button goes down, so the chime arrives with the joke.
       const goal = GAG_GOALS[id];
-      if (goal) timeouts.push(setTimeout(() => get().complete(goal), Math.min(1500, gag.duration * 0.4)));
+      if (goal) timeouts.push(setTimeout(() => get().complete(goal), Math.min(1500, duration * 0.4)));
       if (id === "slap") timeouts.push(setTimeout(() => get().complete("finger"), 1300));
       if (id === "shy") {
         timeouts.push(
@@ -494,10 +540,32 @@ export const useCowStore = create<CowStore>((set, get) => {
       for (const step of gag.script) {
         const timeout = setTimeout(() => {
           if (step.sound) sounds[step.sound]();
-          if (step.scare) set({ scareSeq: get().scareSeq + 1 });
+          if (step.scare) {
+            if (target === "bull") set({ bullSeq: get().bullSeq + 1 });
+            else set({ scareSeq: get().scareSeq + 1 });
+          }
+          if (step.hit) {
+            if (target === "apple") {
+              rustle();
+              set({ shakeSeq: get().shakeSeq + 1 });
+            } else set({ looSeq: get().looSeq + 1 });
+          }
           if (step.say || step.pool) {
+            // the slap's comeback gets nastier with every slap
+            const pool: LinePool | undefined =
+              step.pool === "slap1"
+                ? (`slap${Math.min(3, Math.max(1, get().slapCount))}` as LinePool)
+                : step.pool === "bellow" && target === "bull"
+                  ? "bull"
+                  : step.pool;
+            // and a dance gets its own lines, if the dance it is has any
+            const dance = pool === "dance" ? currentDance()?.name : undefined;
             set({
-              dialogue: step.pool ? pickLine(step.pool) : step.say ?? null,
+              dialogue: dance
+                ? pick(`dance:${dance}`, infoFor(dance).lines)
+                : pool
+                  ? pickLine(pool)
+                  : step.say ?? null,
               speaker: "cow",
             });
           }
@@ -513,7 +581,7 @@ export const useCowStore = create<CowStore>((set, get) => {
         timeouts.push(timeout);
       }
 
-      const end = setTimeout(() => set({ activeGag: null, dialogue: null }), gag.duration);
+      const end = setTimeout(() => set({ activeGag: null, dialogue: null }), duration);
       timeouts.push(end);
     },
 

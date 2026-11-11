@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { useCowStore, type Prompt } from "@/lib/store";
-import { gags, kissAmount, KISS_BACK, SLAP_IMPACT } from "@/lib/reactions";
+import { gags, kissAmount, KISS_BACK, pick, SLAP_IMPACT } from "@/lib/reactions";
 import { addPose, addPoses, samplePose, Pose, PartName, PART_NAMES, LEGS } from "@/lib/poses";
 import {
   BACK_REST,
@@ -15,9 +15,18 @@ import {
   gallopPose,
   idlePose,
   quadWalk,
+  standPose,
 } from "@/lib/locomotion";
 import { angleDelta, approach, cowState, turnToward } from "@/lib/cowState";
 import { dancePose } from "@/lib/dance";
+import { currentDance, DANCE_PARTS, danceNames, hasDances, preloadAll, sampleDance, startDance } from "@/lib/mocap";
+import { infoFor, TITLE_DANCES } from "@/lib/danceInfo";
+import { musicStyle, startMusic, stopMusic } from "@/lib/music";
+
+const scratchV = new THREE.Vector3();
+const scratchQ = new THREE.Quaternion();
+const scratchQ2 = new THREE.Quaternion();
+const scratchE = new THREE.Euler();
 import { idleSeconds, moveAxis, onAction, onInteract, sprinting, startInput } from "@/lib/input";
 import { addShake, cam, cameraGap, frameFront, lookForward } from "@/lib/camera";
 import { cowPhysics, kickSpring, makeSpring, relaxPhysics, stepCowPhysics, stepSpring } from "@/lib/physics";
@@ -27,6 +36,7 @@ import { loft, rng } from "@/lib/geometry";
 import { wind } from "@/lib/sway";
 import {
   coatMaterial,
+  coatSlim,
   COW_BONES,
   HEAD_POS,
   HOOF_HEIGHT,
@@ -48,6 +58,10 @@ import {
   POND,
   resolveFence,
   resolveSolids,
+  resolveNose,
+  APPLE_TREE,
+  BULL_PEN,
+  PORTALOO,
   SCARECROW,
   SPEED_LIMIT,
   SPEED_ZONE,
@@ -541,6 +555,8 @@ function useCowMaterials() {
       // Matched to the white and the black of the coat, for the few loose
       // parts that sit on one or the other: eyelids, the tail, the ears.
       pale: new THREE.MeshStandardMaterial({ color: "#efeae0", roughness: 0.8 }),
+      stem: new THREE.MeshStandardMaterial({ color: "#3c7a2e", roughness: 0.7 }),
+      petal: new THREE.MeshStandardMaterial({ color: "#c8102e", roughness: 0.45 }),
       dark: new THREE.MeshStandardMaterial({ color: "#1d1917", roughness: 0.78 }),
       ink: new THREE.MeshStandardMaterial({ color: "#16110e", roughness: 0.7 }),
       // Hair, as opposed to coat: warmer and lighter than the black of the hide
@@ -626,6 +642,11 @@ export default function Cow() {
    * snapping there.
    */
   const danceK = useRef(0);
+  /** Which dance the travel total below belongs to, and how far along it the cow has been moved. */
+  const danceSeen = useRef<unknown>(null);
+  const travelled = useRef(new THREE.Vector3());
+  const lastHeadQ = useRef(new THREE.Quaternion());
+  const lastBodyQ = useRef(new THREE.Quaternion());
 
   const activeGag = useCowStore((s) => s.activeGag);
   const gagStartedAt = useCowStore((s) => s.gagStartedAt);
@@ -667,6 +688,11 @@ export default function Cow() {
     }),
     []
   );
+
+  // Fetch the dances in the background as soon as the cow exists.
+  useEffect(() => {
+    void danceNames().then(preloadAll);
+  }, []);
 
   useEffect(() => {
     if (inCutscene) {
@@ -743,6 +769,132 @@ export default function Cow() {
       bindSkin(jaw, mats.coat, pivot, rest);
       pivot.visible = true;
     });
+  }
+
+  /**
+   * Pose the cow from the motion-captured dance, on top of whatever the parts
+   * were just set to, by `k` (0 = leave them, 1 = all dance). Then move it by
+   * however far the dancer travelled and stand it on the ground. Returns false
+   * if there was nothing to sample.
+   */
+  function applyDance(node: Nodes, k: number, dt: number): boolean {
+    const target = sampleDance(BASE);
+    const pivot = pivotRef.current;
+    if (!target || !pivot) return false;
+    for (const name of DANCE_PARTS) {
+      const q = target.quat[name];
+      if (q) node[name]?.quaternion.slerp(q, k);
+    }
+    node.body?.position.lerp(target.bodyPos, k);
+
+    // Ears and a tail on a dancing cow should not be along for the ride; they
+    // are flung about by it. How fast the head and body are turning kicks the
+    // same springs a slap does, so a spin sends them flying and a hold lets
+    // them settle.
+    const head = target.quat.head;
+    const body = target.quat.body;
+    if (head && body) {
+      const spinHead = lastHeadQ.current.angleTo(head);
+      const spinBody = lastBodyQ.current.angleTo(body);
+      lastHeadQ.current.copy(head);
+      lastBodyQ.current.copy(body);
+      if (spinHead < 1 && spinBody < 1 && dt > 0) {
+        // A steady push, measured in how far it holds the ear over: about a
+        // quarter of a radian for ordinary dancing, flat back in a headspin.
+        const spin = (spinHead + spinBody) / dt;
+        const hold = Math.min(0.9, spin * 0.12) * k;
+        kickSpring(cowPhysics.earL, -120 * hold * dt);
+        kickSpring(cowPhysics.earR, -120 * hold * dt);
+        kickSpring(cowPhysics.tail, 55 * hold * dt * Math.sin(performance.now() / 160));
+      }
+    }
+
+    // A moonwalk goes somewhere. The distance comes back as a running total
+    // along the loop, so the step is the change since last frame — turned to
+    // face the way the cow faces, and stopped by fences like any other step.
+    const d = currentDance();
+    if (d !== danceSeen.current) {
+      danceSeen.current = d;
+      travelled.current.copy(target.travel);
+    }
+    const step = target.travel.clone().sub(travelled.current);
+    travelled.current.copy(target.travel);
+    if (step.lengthSq() < 0.25) {
+      const sin = Math.sin(cowState.facing);
+      const cos = Math.cos(cowState.facing);
+      cowState.x += (step.x * cos + step.z * sin) * k;
+      cowState.z += (-step.x * sin + step.z * cos) * k;
+      const fence = resolveFence(cowState.x, cowState.z, cowState.outside, cowState.gateOpen);
+      cowState.outside = fence.outside;
+      const solid = resolveSolids(fence.x, fence.z);
+      cowState.x = solid.x;
+      cowState.z = solid.z;
+      pivot.position.set(cowState.x, 0, cowState.z);
+    }
+
+    // On the ground: the cow's lowest point goes exactly as high as the
+    // dancer's. That is the hooves in a moonwalk and the head in a headspin.
+    pivot.updateMatrixWorld(true);
+    let low = Infinity;
+    const at = (name: string, below: number) => {
+      const o = node[name];
+      if (o) low = Math.min(low, o.getWorldPosition(scratchV).y - below);
+    };
+    for (let i = 0; i < 4; i++) at(`hoof${i}`, 0);
+    for (const n of ["kneeFL", "kneeFR", "kneeBL", "kneeBR"]) at(n, 0.07);
+    for (const n of ["legFL", "legFR", "legBL", "legBR"]) at(n, 0.3);
+    at("head", 0.28);
+    // the middle of the barrel, for anything done lying down
+    if (node.body) low = Math.min(low, node.body.localToWorld(scratchV.set(0, 0.8, 0)).y - 0.4);
+    if (node.body && Number.isFinite(low)) node.body.position.y += (target.low - low) * k;
+    return true;
+  }
+
+  /**
+   * Hind hooves flat on the ground while dancing, whatever the legs above them
+   * are doing; front hooves simply carry on the line of the forearm, which is
+   * what a hand does.
+   */
+  function flattenHooves(node: Nodes, k: number) {
+    const pivot = pivotRef.current;
+    if (!pivot) return;
+    pivot.updateMatrixWorld(true);
+    const flat = pivot.getWorldQuaternion(scratchQ);
+    for (let i = 0; i < 4; i++) {
+      const hoof = node[`hoof${i}`];
+      if (!hoof?.parent) continue;
+      // Only a hoof that is near the ground has any reason to be flat on it;
+      // one waving in the air (a headspin, say) carries on the line of the leg.
+      const near = i >= 2 ? THREE.MathUtils.clamp(1 - (hoof.getWorldPosition(scratchV).y - 0.06) / 0.25, 0, 1) : 0;
+      const want = hoof.parent
+        .getWorldQuaternion(new THREE.Quaternion())
+        .invert()
+        .multiply(flat)
+        .slerp(new THREE.Quaternion(), 1 - near);
+      hoof.quaternion.slerp(want, k);
+    }
+  }
+
+  /**
+   * Let the tail hang. Its pose was written for a body at the rear-up angle,
+   * but a dance drives the body from motion capture — upright, leaning, spun
+   * upside down — so the tail ended up pointing wherever that left it. It is
+   * a tail: in world space it hangs down, a little back, whatever the body is
+   * doing. The sideways swing the springs gave it is kept.
+   */
+  function hangTail(node: Nodes, k: number) {
+    const tail = node.tail;
+    const pivot = pivotRef.current;
+    if (!tail?.parent || !pivot) return;
+    pivot.updateMatrixWorld(true);
+    const want = pivot.getWorldQuaternion(scratchQ);
+    want.multiply(scratchQ2.setFromEuler(scratchE.set(BASE.tail.rot[0], tail.rotation.y, 0)));
+    tail.parent.updateWorldMatrix(true, false);
+    tail.parent.getWorldQuaternion(scratchQ2).invert();
+    tail.quaternion.slerp(want.premultiply(scratchQ2), k);
+    // the tip's stand-up curl has nothing to curl against any more
+    const tip = node.tailTip;
+    if (tip) tip.rotation.x *= 1 - k;
   }
 
   /**
@@ -927,10 +1079,16 @@ export default function Cow() {
     const started = useCowStore.getState().started;
     const dancing = !started || activeGag === "dance";
     danceK.current = approach(danceK.current, dancing ? 1 : 0, dt / (dancing ? 1.2 : 0.8));
+    // The title card picks its own dance, once there are any to pick from.
+    if (!started && !currentDance() && hasDances()) startDance(TITLE_DANCES);
+    const mocap = currentDance() !== null;
     if (dancing) {
       cowState.speed = 0;
       cowState.stand = danceK.current;
-      pose = dancePose(now, dt, danceK.current);
+      // With a motion-captured dance on, the cow is posed from it after the
+      // parts are applied (see `applyDance`); this is just the stance it rises
+      // out of. Without one — still loading, or no files — the old routine.
+      pose = mocap ? standPose(danceK.current) : dancePose(now, dt, danceK.current);
     } else if (inCutscene && runnerRef.current) {
       const result = stepCutscene(runnerRef.current, dt);
       if (result.say !== undefined) {
@@ -988,7 +1146,7 @@ export default function Cow() {
     // the cow up rather than letting it down.
     if (!dancing && !inCutscene && danceK.current > 0.001) {
       cowState.stand = danceK.current;
-      pose = addPose(pose, dancePose(now, dt, danceK.current));
+      pose = addPose(pose, mocap ? standPose(danceK.current) : dancePose(now, dt, danceK.current));
     }
 
     // The gate. The cutscene drives the panel itself while it is running — it
@@ -1030,8 +1188,27 @@ export default function Cow() {
       applyPart(node[name], BASE[name], pose[name]);
     }
 
+    coatSlim.value = cowState.stand;
+
+    const danced = mocap && !inCutscene && danceK.current > 0.001 && applyDance(node, danceK.current, dt);
+
+    // The music plays for as long as the dance does — only once the game has
+    // started, since the browser will not make a sound before the first click.
+    const info = infoFor(currentDance()?.name);
+    const music = started && activeGag === "dance" && mocap ? info.music : null;
+    if (music !== musicStyle()) {
+      if (music) startMusic(music);
+      else stopMusic();
+    }
+    const rose = node.rose;
+    if (rose) rose.visible = !!danced && !!info.rose && danceK.current > 0.4;
+
     stretchNeck(node);
     levelHooves(node, pose);
+    if (danced) {
+      flattenHooves(node, danceK.current);
+      hangTail(node, danceK.current);
+    }
     aimFist(node, pose);
     swayHair(node, dt);
     blink(node, dt);
@@ -1124,6 +1301,31 @@ export default function Cow() {
             {/* Out of the side of the mouth at a gallop, flapping, and lolling
                 out when the cow has run into something. Nothing says "this
                 animal is not in control" like a tongue in the wind. */}
+            {/* A rose between the teeth, for the slow dances. */}
+            <group name="rose" position={[0.02, -0.035, 0.2]} rotation={[0, 0, 0.12]} visible={false}>
+              <mesh rotation={[0, 0, Math.PI / 2]} material={mats.stem}>
+                <cylinderGeometry args={[0.008, 0.008, 0.34, 6]} />
+              </mesh>
+              <mesh position={[0.06, 0.012, 0]} rotation={[0, 0.4, 0.5]} scale={[1.6, 0.5, 0.9]} material={mats.stem}>
+                <sphereGeometry args={[0.022, 8, 6]} />
+              </mesh>
+              <group position={[0.19, 0, 0]}>
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <mesh
+                    key={i}
+                    position={[0.012 * Math.cos(i * 1.26), 0.012 * Math.sin(i * 1.26), 0]}
+                    rotation={[i * 1.26, 0, 0.6]}
+                    scale={[0.9, 1.15, 0.7]}
+                    material={mats.petal}
+                  >
+                    <sphereGeometry args={[0.03, 10, 8]} />
+                  </mesh>
+                ))}
+                <mesh scale={[1.2, 1, 1]} material={mats.petal}>
+                  <sphereGeometry args={[0.026, 10, 8]} />
+                </mesh>
+              </group>
+            </group>
             <group name="tongue" position={[0.035, -0.07, 0.17]} scale={HIDDEN}>
               <mesh geometry={tongueGeo()} material={mats.tongue} castShadow />
             </group>
@@ -1368,6 +1570,7 @@ function kissLunge(elapsed: number, dt: number): Pose {
 /** True while the cow is pressed against something, so each contact thumps once. */
 let onFence = false;
 let onProp = false;
+let onNose = false;
 
 /**
  * Whatever the cow is standing next to, as the one contextual action.
@@ -1437,6 +1640,26 @@ function nearestPrompt(grassEatenAt: (number | null)[]): Prompt | null {
       icon: "👮",
     });
   }
+
+  consider(BULL_PEN.x, BULL_PEN.z, BULL_PEN.hw + 2.3, {
+    kind: "bull",
+    id: 0,
+    label: "Moo at the bull",
+    icon: "🐂",
+  });
+  const vacated = useCowStore.getState().looSeq >= 3;
+  consider(PORTALOO.x, PORTALOO.z, 2.6, {
+    kind: "loo",
+    id: vacated ? 1 : 0,
+    label: vacated ? "Look inside" : "Knock",
+    icon: vacated ? "👀" : "🚪",
+  });
+  consider(APPLE_TREE.x, APPLE_TREE.z, 2.4, {
+    kind: "apple",
+    id: 0,
+    label: "Headbutt the tree",
+    icon: "🍎",
+  });
 
   return best;
 }
@@ -1536,6 +1759,24 @@ function drive(dt: number, now: number, grassEatenAt: (number | null)[]): Pose {
     onProp = false;
   }
 
+  // ...and the same again for the head, which is a metre in front of all
+  // that and used to go straight into whatever the body had stopped short of.
+  const nose = resolveNose(cowState.x, cowState.z, cowState.facing);
+  if (nose.hit) {
+    // Never let the nose push the body through the fence it was just held by.
+    const safe = resolveFence(nose.x, nose.z, cowState.outside, cowState.gateOpen);
+    cowState.x = safe.x;
+    cowState.z = safe.z;
+    if (!onNose) {
+      onNose = true;
+      kickSpring(cowPhysics.headPitch, 1.4 * gait);
+      if (impact >= BONK_SPEED && !useCowStore.getState().activeGag) bonked();
+    }
+    if (len > 0.001) cowState.speed *= 0.6;
+  } else {
+    onNose = false;
+  }
+
   const prompt = nearestPrompt(grassEatenAt);
   const store = useCowStore.getState();
   store.setPrompt(prompt);
@@ -1559,12 +1800,12 @@ function drive(dt: number, now: number, grassEatenAt: (number | null)[]): Pose {
  * about it — until, if you still will not do anything, it gives you what it
  * assumes you are waiting for.
  */
-const STARE_LINES: [number, string][] = [
-  [16, "..."],
-  [24, "Can I help you?"],
-  [36, "Are you just going to stare at me?"],
-  [50, "I'm going to start charging for this."],
-  [66, "Fine. FINE. You want a show?"],
+const STARE_LINES: [number, string[]][] = [
+  [16, ["...", "Hm?", "Oh. Hello."]],
+  [24, ["Can I help you?", "Something on my face?", "Do you mind?"]],
+  [36, ["Are you just going to stare at me?", "This is getting weird.", "Blink. Please. Once."]],
+  [50, ["I'm going to start charging for this.", "I can see you, you know.", "Is this what you do all day?"]],
+  [66, ["Fine. FINE. You want a show?", "You leave me no choice.", "Okay. Here's your money's worth."]],
 ];
 let stareK = 0;
 let stareSaid = 0;
@@ -1576,7 +1817,7 @@ function stare(dt: number): Pose {
   stareK = approach(stareK, watching ? 1 : 0, dt / (watching ? 1.6 : 0.35));
   const store = useCowStore.getState();
   while (stareSaid < STARE_LINES.length && idle > STARE_LINES[stareSaid][0]) {
-    store.stare(STARE_LINES[stareSaid][1]);
+    store.stare(pick(`stare${stareSaid}`, STARE_LINES[stareSaid][1]));
     stareSaid++;
     if (stareSaid === STARE_LINES.length) {
       // the show: then it starts over, a full minute later

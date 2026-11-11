@@ -173,29 +173,39 @@ function jawPrims(): Prim[] {
 function bodyPrims(): Prim[] {
   const b = BONE.body;
   const mirror = (f: (s: number) => Prim) => [f(-1), f(1)];
+  const front = (s: number) => legJoints(FRONT_RIG, FRONT_REST, s).hip;
+  const back = (s: number) => legJoints(BACK_RIG, BACK_REST, s).hip;
   return [
-    // The barrel is three overlapping masses rather than one egg: ribs, a belly
-    // that hangs lower and wider, and a squarer hindquarter. A cow is deeper
-    // than it is wide and close to straight along the back.
-    { d: ellipsoid([0, 0.835, 0.12], [0.265, 0.285, 0.48]), bone: b },
-    { d: ellipsoid([0, 0.79, -0.2], [0.28, 0.29, 0.42]), bone: b, k: 0.16 },
-    { d: ellipsoid([0, 0.875, -0.5], [0.232, 0.235, 0.27]), bone: b, k: 0.12 },
-    // the pin bones and the slope of the rump down to the tail
-    { d: ellipsoid([0, 0.97, -0.67], [0.165, 0.12, 0.12]), bone: b, k: 0.08 },
-    // forequarter and chest
-    { d: ellipsoid([0, 0.86, 0.48], [0.205, 0.26, 0.26]), bone: b, k: 0.12 },
-    // a straight back, with the withers rising at the front of it
-    { d: capsule([0, 1.03, 0.48], [0, 1.035, -0.6], 0.085), bone: b, k: 0.12 },
-    { d: ellipsoid([0, 1.06, 0.42], [0.085, 0.07, 0.16]), bone: b, k: 0.08 },
-    // the hooks: the two corners of the pelvis, which make a cow's back end
-    // angular from above rather than round
-    ...mirror((s) => ({ d: ellipsoid([s * 0.18, 1.02, -0.42], [0.065, 0.05, 0.07]), bone: b, k: 0.08 })),
-    // shoulder and haunch — the muscle that the legs grow out of
-    ...mirror((s) => ({ d: ellipsoid([s * 0.15, 0.84, 0.47], [0.1, 0.2, 0.15]), bone: b, k: 0.08, bias: -0.01 })),
-    ...mirror((s) => ({ d: ellipsoid([s * 0.165, 0.8, -0.48], [0.1, 0.2, 0.18]), bone: b, k: 0.08, bias: -0.01 })),
+    // The trunk is three tapered pieces laid end to end along a spine that
+    // dips a little at the loin, rather than a stack of separate balls. Ribs
+    // are the deepest part, the flank tucks up behind them, and the hindquarter
+    // closes down toward the tail. Each is a little narrower than it is deep.
+    { d: roundCone([0, 0.87, 0.4], [0, 0.82, -0.08], 0.245, 0.27, 0.9), bone: b },
+    { d: roundCone([0, 0.82, -0.08], [0, 0.88, -0.4], 0.27, 0.225, 0.9), bone: b, k: 0.14 },
+    { d: roundCone([0, 0.9, -0.4], [0, 0.95, -0.67], 0.225, 0.13, 0.92), bone: b, k: 0.12 },
+    // chest, narrowing forward into the base of the neck
+    { d: roundCone([0, 0.85, 0.34], [0, 0.88, 0.58], 0.235, 0.17, 0.85), bone: b, k: 0.12 },
+    // the spine: straight, with the withers lifting at the front of it
+    { d: capsule([0, 1.03, 0.48], [0, 1.035, -0.6], 0.075), bone: b, k: 0.12 },
+    { d: ellipsoid([0, 1.06, 0.42], [0.075, 0.07, 0.16]), bone: b, k: 0.08 },
+    // the hooks: the corners of the pelvis
+    ...mirror((s) => ({ d: ellipsoid([s * 0.175, 1.0, -0.42], [0.06, 0.05, 0.07]), bone: b, k: 0.08 })),
+    // The shoulder blade runs from the top of the withers down into the arm,
+    // and the haunch from the hip bone down into the thigh: muscle that
+    // flows into the limb instead of a blob that the limb is stuck onto.
+    ...mirror((s) => ({
+      d: roundCone([s * 0.12, 1.0, 0.42], front(s), 0.085, 0.11, 0.9),
+      bone: b,
+      k: 0.1,
+    })),
+    ...mirror((s) => ({
+      d: roundCone([s * 0.15, 0.98, -0.46], back(s), 0.1, 0.13, 0.9),
+      bone: b,
+      k: 0.1,
+    })),
     // brisket and dewlap: the keel of the chest and the fold of skin under the throat
-    { d: ellipsoid([0, 0.64, 0.55], [0.12, 0.12, 0.14]), bone: b, k: 0.1 },
-    { d: ellipsoid([0, 0.77, 0.68], [0.045, 0.13, 0.11]), bone: b, k: 0.08 },
+    { d: ellipsoid([0, 0.66, 0.5], [0.1, 0.1, 0.14]), bone: b, k: 0.1 },
+    { d: ellipsoid([0, 0.77, 0.68], [0.04, 0.12, 0.1]), bone: b, k: 0.08 },
     // the udder, two lobes with a cleft between them
     { d: ellipsoid([0, 0.6, -0.4], [0.13, 0.1, 0.16]), bone: b, k: 0.07 },
     ...mirror((s) => ({ d: ellipsoid([s * 0.068, 0.545, -0.4], [0.075, 0.07, 0.13]), bone: b, k: 0.04 })),
@@ -357,6 +367,15 @@ vec3 cowCoat(vec3 p) {
 `;
 
 /**
+ * How far the torso and neck are slimmed, 0..1. The skin was meshed for a cow on
+ * all fours, where a deep round barrel is right; stood up on two legs the same
+ * barrel reads as a balloon. So the vertices that belong to the body and the
+ * neck are drawn in toward their own axis as the cow rears up, in the shader,
+ * before the skeleton moves them. Driven from cowState.stand in Cow.tsx.
+ */
+export const coatSlim = { value: 0 };
+
+/**
  * The coat material: an ordinary lit, shadowed MeshStandardMaterial whose
  * colour is swapped for `cowCoat()` of the rest-pose position. The skinned
  * mesh's `position` attribute IS the rest pose, so no extra data is needed.
@@ -366,9 +385,36 @@ export function coatMaterial(): THREE.MeshStandardMaterial {
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uPatchC = { value: PATCHES.map(([c]) => new THREE.Vector3(...c)) };
     shader.uniforms.uPatchR = { value: PATCHES.map(([, r]) => new THREE.Vector3(...r)) };
+    shader.uniforms.uSlim = coatSlim;
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vRest;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRest = position;");
+      .replace("#include <common>", "#include <common>\nvarying vec3 vRest;\nuniform float uSlim;")
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+vRest = position;
+#ifdef USE_SKINNING
+{
+  // how much of this vertex belongs to the body bone (0) and the neck bone (1)
+  float wBody = (skinIndex.x < 0.5 ? skinWeight.x : 0.0) + (skinIndex.y < 0.5 ? skinWeight.y : 0.0)
+              + (skinIndex.z < 0.5 ? skinWeight.z : 0.0) + (skinIndex.w < 0.5 ? skinWeight.w : 0.0);
+  float wNeck = (abs(skinIndex.x - 1.0) < 0.5 ? skinWeight.x : 0.0) + (abs(skinIndex.y - 1.0) < 0.5 ? skinWeight.y : 0.0)
+              + (abs(skinIndex.z - 1.0) < 0.5 ? skinWeight.z : 0.0) + (abs(skinIndex.w - 1.0) < 0.5 ? skinWeight.w : 0.0);
+  // barrel: narrower across, shallower top to bottom, a touch longer
+  float b = uSlim * wBody;
+  transformed.x *= 1.0 - 0.07 * b;
+  // The belly is the part that ends up facing forward once the cow is upright,
+  // so it is pulled in far harder than the back, which is behind it.
+  float below = 1.0 - smoothstep(0.55, 0.9, transformed.y);
+  transformed.y = 0.9 + (transformed.y - 0.9) * (1.0 - (0.04 + 0.14 * below) * b);
+  transformed.z *= 1.0 + 0.02 * b;
+  // neck: thinner about its own axis, which climbs from y 0.92 to 1.02
+  float n = uSlim * wNeck;
+  float axisY = 0.92 + clamp((transformed.z - 0.42) / 0.42, 0.0, 1.0) * 0.1;
+  transformed.x *= 1.0 - 0.10 * n;
+  transformed.y = axisY + (transformed.y - axisY) * (1.0 - 0.08 * n);
+}
+#endif`
+      );
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>\n${COAT_GLSL}`)
       .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb = cowCoat(vRest);");

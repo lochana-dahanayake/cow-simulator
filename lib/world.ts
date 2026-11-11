@@ -73,7 +73,7 @@ export const INTERACT_RANGE = 1.5;
 export const REGROW_MS = 14000;
 
 /** Slaps needed before the cow gives up and files a police report. */
-export const SLAPS_BEFORE_POLICE = 4;
+export const SLAPS_BEFORE_POLICE = 3;
 
 export const WALK_SPEED = 2.3;
 /**
@@ -135,20 +135,32 @@ export interface Solid {
   z: number;
   /** Includes the cow's girth: this is how far its centre is held off. */
   r: number;
+  /**
+   * Low enough for the cow to hang its head over: the pond, the trough. The
+   * body is still held off it, but the nose is not (see `resolveNose`).
+   */
+  low?: boolean;
 }
 
 export const SCARECROW = { x: -4.6, z: 13.8 };
 export const POND = { x: 14.5, z: -12.2, r: 3.3 };
 /**
- * The speed camera, on the verge at the far end of the road.
- *
- * It used to sit at x=11.4, four metres past the gate, which meant it went off
- * before the player had finished noticing they were outside — the gag fired as
- * part of leaving the pen rather than as its own thing. Down here it belongs to
- * the station, which is whose camera it would be, and the cow has to have got
- * up to speed to trip it.
+ * A dirt lane off the road, down to the pond. It runs north-south (along z),
+ * from the road's edge to the trodden mud at the water.
  */
-export const SPEED_TRAP = { x: 12.4, z: 1.9 };
+export const LANE = { x: 13.2, z0: -1.4, z1: -8.3, w: 2.8 };
+
+/**
+ * The speed camera, on the verge of the pond lane.
+ *
+ * It used to stand on the road itself, between the pen and the station, so
+ * every trip to the officer ran straight through it and it went off as part of
+ * leaving the pen rather than as its own thing. Down the pond lane it is
+ * somewhere you choose to go, on the way to something you want (a drink).
+ */
+export const SPEED_TRAP = { x: LANE.x + LANE.w / 2 + 0.45, z: -5.2 };
+/** Which way the box points: back up the lane, at a cow coming down from the road. */
+export const SPEED_TRAP_FACE = Math.atan2(LANE.x - SPEED_TRAP.x, LANE.z0 - SPEED_TRAP.z);
 /**
  * How fast the cow has to be going past it to set it off: between a walk and a
  * gallop, so it is the player's choice. It used to be 1.9 — slower than the
@@ -159,30 +171,44 @@ export const SPEED_TRAP = { x: 12.4, z: 1.9 };
  */
 export const SPEED_LIMIT = 3.2;
 /**
- * How close it has to be to notice. Has to be comfortably bigger than
- * `SPEED_TRAP.z`, or a cow galloping down the middle of the road never comes
- * inside it and the camera can only catch one that hugs the verge.
- */
-export const SPEED_TRAP_RANGE = 3.4;
-/**
- * Where the camera actually measures: the strip of road under the painted
+ * Where the camera actually measures: the strip of lane under the painted
  * lines, verge to verge. A circle round the post (which is what this used to
  * be) fired the moment a cow strayed near the pole at any angle, often while
- * it was still getting up to speed; a measured strip across the road fires
+ * it was still getting up to speed; a measured strip across the lane fires
  * where the lines say it will, at whatever the cow is actually doing there.
  */
 export const SPEED_ZONE = {
-  x0: SPEED_TRAP.x - 1.3,
-  x1: SPEED_TRAP.x + 1.4,
-  z0: SPEED_TRAP.z - 4.2,
-  z1: SPEED_TRAP.z + 0.6,
+  x0: LANE.x - LANE.w / 2 - 0.4,
+  x1: SPEED_TRAP.x + 0.5,
+  z0: SPEED_TRAP.z - 1.4,
+  z1: SPEED_TRAP.z + 1.4,
 };
 
 /** Seconds the camera needs to recharge between photos. */
 export const SPEED_TRAP_COOLDOWN = 6;
 
-/** The posted limit and the camera warning, on the verge on the way to it. */
-export const SPEED_SIGN = { x: 9.9, z: 1.85 };
+/**
+ * The posted limit and the camera warning, at the top of the lane, facing the
+ * road — so the rule is there to be read before the cow turns down it.
+ */
+export const SPEED_SIGN = { x: LANE.x - LANE.w / 2 - 0.35, z: -2.3 };
+
+/**
+ * The portaloo, round the side of the station. Somebody is always in it.
+ * `face` is the way the door looks: back towards the road.
+ */
+export const PORTALOO = { x: 23.4, z: 6.4, face: -Math.PI / 2 - 0.5 };
+/** The apple tree. Shake it and find out. */
+export const APPLE_TREE = { x: -2.5, z: -13.5 };
+/** The fingerpost where the pond lane leaves the road. */
+export const SIGNPOST = { x: 10.6, z: 2.5 };
+/**
+ * The bull's paddock: a rail fence round one very large animal who has no
+ * interest in anything. A box, like the station, because it is one.
+ */
+export const BULL_PEN = { x: -17.5, z: 16.2, hw: 3.6, hd: 2.8 };
+/** The dry-stone wall round the whole field. The cow's centre stops at WORLD_RADIUS. */
+export const WALL_RADIUS = 31.4;
 
 /** Where the flock starts. They wander from here and run from the cow. */
 export const SHEEP_HOME = { x: -15, z: -9 };
@@ -209,6 +235,9 @@ const CLEARINGS: Solid[] = [
   { x: POND.x, z: POND.z, r: POND.r + 1.2 },
   { x: SCARECROW.x, z: SCARECROW.z, r: 2.6 },
   { x: SPEED_TRAP.x, z: SPEED_TRAP.z, r: 2.4 },
+  { x: BULL_PEN.x, z: BULL_PEN.z, r: 6.2 },
+  { x: PORTALOO.x, z: PORTALOO.z, r: 5 },
+  { x: APPLE_TREE.x, z: APPLE_TREE.z, r: 4 },
 ];
 
 export const TREES: TreeSpot[] = (() => {
@@ -235,11 +264,19 @@ export const TREES: TreeSpot[] = (() => {
  * the models are built from.
  */
 export const SOLIDS: Solid[] = [
-  ...OBSTACLES.map((o) => ({ x: o.x, z: o.z, r: o.r })),
+  // the trough is low; the bales are not
+  ...OBSTACLES.map((o, i) => ({ x: o.x, z: o.z, r: o.r, low: i === 0 })),
   ...TREES.map((t) => ({ x: t.x, z: t.z, r: 0.42 * t.scale + COW_GIRTH })),
   { x: SCARECROW.x, z: SCARECROW.z, r: 0.55 },
   { x: SPEED_TRAP.x, z: SPEED_TRAP.z, r: 0.5 },
   { x: SPEED_SIGN.x, z: SPEED_SIGN.z, r: 0.45 },
+  // The pond. It used to be walkable — a cow strolling across the top of the
+  // water — and the lane now points straight at it. Held off at the bank, the
+  // head still reaches over the water to drink (the prompt reaches further).
+  { x: POND.x, z: POND.z, r: POND.r + 0.15, low: true },
+  { x: PORTALOO.x, z: PORTALOO.z, r: 0.75 + COW_GIRTH },
+  { x: APPLE_TREE.x, z: APPLE_TREE.z, r: 0.38 + COW_GIRTH },
+  { x: SIGNPOST.x, z: SIGNPOST.z, r: 0.5 },
   // The officer. He is not going to move out of the way.
   { x: OFFICER.x, z: OFFICER.z, r: 0.85 },
 ];
@@ -256,15 +293,35 @@ export const STATION_BOX = {
   hd: 6.4 / 2 + 0.15 + COW_GIRTH,
 };
 
-/** Push a point out of the station's footprint, along whichever face is nearest. */
-function pushOutOfStation(x: number, z: number): { x: number; z: number; hit: boolean } {
-  const dx = x - STATION_BOX.x;
-  const dz = z - STATION_BOX.z;
-  const ox = STATION_BOX.hw - Math.abs(dx);
-  const oz = STATION_BOX.hd - Math.abs(dz);
+/** A rectangle on the ground that things are held out of. Half-sizes include the cow's girth. */
+export interface Box {
+  x: number;
+  z: number;
+  hw: number;
+  hd: number;
+}
+
+/** The bull's paddock, as the cow's centre sees it. */
+export const BULL_BOX: Box = {
+  x: BULL_PEN.x,
+  z: BULL_PEN.z,
+  hw: BULL_PEN.hw + 0.1 + COW_GIRTH,
+  hd: BULL_PEN.hd + 0.1 + COW_GIRTH,
+};
+
+const BOXES: Box[] = [STATION_BOX, BULL_BOX];
+
+/** Push a point out of a box, along whichever face is nearest. `shrink` pulls the faces in. */
+function pushOutOfBox(b: Box, x: number, z: number, shrink = 0): { x: number; z: number; hit: boolean } {
+  const dx = x - b.x;
+  const dz = z - b.z;
+  const hw = b.hw - shrink;
+  const hd = b.hd - shrink;
+  const ox = hw - Math.abs(dx);
+  const oz = hd - Math.abs(dz);
   if (ox <= 0 || oz <= 0) return { x, z, hit: false };
-  if (ox < oz) return { x: STATION_BOX.x + Math.sign(dx || 1) * STATION_BOX.hw, z, hit: true };
-  return { x, z: STATION_BOX.z + Math.sign(dz || 1) * STATION_BOX.hd, hit: true };
+  if (ox < oz) return { x: b.x + Math.sign(dx || 1) * hw, z, hit: true };
+  return { x, z: b.z + Math.sign(dz || 1) * hd, hit: true };
 }
 
 /**
@@ -287,8 +344,80 @@ export function resolveSolids(x: number, z: number): { x: number; z: number; hit
       hit = true;
     }
   }
-  const box = pushOutOfStation(x, z);
-  return { x: box.x, z: box.z, hit: hit || box.hit };
+  for (const b of BOXES) {
+    const out = pushOutOfBox(b, x, z);
+    x = out.x;
+    z = out.z;
+    hit = hit || out.hit;
+  }
+  return { x, z, hit };
+}
+
+/** How far ahead of its own centre the cow's head is. */
+export const NOSE_REACH = 0.95;
+/** How much room the head itself takes up. */
+const NOSE_GIRTH = 0.2;
+
+/**
+ * Keep the cow's HEAD out of things, not just its middle.
+ *
+ * The body is one circle about the cow's centre, which is a metre behind its
+ * nose — so a cow walking up to a tree, a wall or a policeman used to stop
+ * with its whole head buried in them. This tests a second, smaller circle at
+ * the nose and moves the cow back by however far that one is inside something.
+ * Low things (the pond, the trough) are skipped: the head is meant to go over
+ * those. Returns the cow's corrected centre.
+ */
+export function resolveNose(x: number, z: number, facing: number): { x: number; z: number; hit: boolean } {
+  let nx = x + Math.sin(facing) * NOSE_REACH;
+  let nz = z + Math.cos(facing) * NOSE_REACH;
+  const sx = nx;
+  const sz = nz;
+  let hit = false;
+  for (const s of SOLIDS) {
+    if (s.low) continue;
+    const r = Math.max(0.15, s.r - COW_GIRTH) + NOSE_GIRTH;
+    const dx = nx - s.x;
+    const dz = nz - s.z;
+    const d = Math.hypot(dx, dz);
+    if (d < r && d > 1e-4) {
+      nx = s.x + (dx / d) * r;
+      nz = s.z + (dz / d) * r;
+      hit = true;
+    }
+  }
+  for (const b of BOXES) {
+    const out = pushOutOfBox(b, nx, nz, COW_GIRTH - NOSE_GIRTH);
+    nx = out.x;
+    nz = out.z;
+    hit = hit || out.hit;
+  }
+  // the stone wall round the field
+  const nr = Math.hypot(nx, nz);
+  if (nr > WALL_RADIUS - 0.45) {
+    const k = (WALL_RADIUS - 0.45) / nr;
+    nx *= k;
+    nz *= k;
+    hit = true;
+  }
+  return { x: x + (nx - sx), z: z + (nz - sz), hit };
+}
+
+/**
+ * Is this point inside something the camera should not be inside? Buildings
+ * and tree trunks only — the camera looking over a hay bale is fine, the
+ * camera looking at the inside of a wall is not.
+ */
+export function cameraBlocked(x: number, y: number, z: number): boolean {
+  if (y < 4.6 && Math.abs(x - STATION.x) < 5.4 / 2 + 0.45 && Math.abs(z - STATION.z) < 6.4 / 2 + 0.45) return true;
+  if (y < 2.9 && Math.hypot(x - PORTALOO.x, z - PORTALOO.z) < 1.05) return true;
+  if (y < 3.2) {
+    for (const t of TREES) {
+      if (Math.hypot(x - t.x, z - t.z) < 0.5 * t.scale) return true;
+    }
+    if (Math.hypot(x - APPLE_TREE.x, z - APPLE_TREE.z) < 0.55) return true;
+  }
+  return false;
 }
 
 /**

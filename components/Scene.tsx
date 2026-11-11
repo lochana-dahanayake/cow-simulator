@@ -3,18 +3,19 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { advance, Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Sky } from "@react-three/drei";
 import Cow from "./Cow";
 import Pit from "./Pit";
 import GrassPatches from "./Grass";
 import PoliceStation from "./PoliceStation";
 import Environment from "./Environment";
 import Outside from "./Outside";
+import Farm from "./Farm";
+import { rng } from "@/lib/geometry";
 import { useCowStore } from "@/lib/store";
 import { cowState } from "@/lib/cowState";
 import { cam, frame, framedOffset, easeBehind, resetBehind, stepShake } from "@/lib/camera";
 import { attachLook, isTouch } from "@/lib/input";
-import { WAYPOINTS } from "@/lib/world";
+import { cameraBlocked, WAYPOINTS } from "@/lib/world";
 
 /**
  * Mid-afternoon, sun low and behind-left. Everything that needs to agree about
@@ -22,8 +23,11 @@ import { WAYPOINTS } from "@/lib/world";
  * the fill — reads it from here, so they can't drift apart.
  */
 const SUN = new THREE.Vector3(-24, 21, 14);
-/** Haze colour. Matching it to the sky at the horizon is what hides the world's edge. */
-const HAZE = "#bcd0dd";
+/**
+ * Haze colour. The sky dome paints exactly this at the horizon and the fog
+ * fades everything distant to it, which is what hides the world's edge.
+ */
+const HAZE = "#cfe6f7";
 
 export default function Scene() {
   return (
@@ -40,20 +44,25 @@ export default function Scene() {
         // clipping to flat paper, which is most of what makes untuned WebGL look
         // like a screensaver.
         gl.toneMapping = THREE.ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.05;
-        scene.fog = new THREE.FogExp2(HAZE, 0.011);
+        gl.toneMappingExposure = 1.08;
+        // Thin: the hills are a hundred metres off now and should still be
+        // green when they get here, with only the far ridge gone to blue.
+        scene.fog = new THREE.FogExp2(HAZE, 0.0052);
       }}
       style={{ width: "100%", height: "100%", touchAction: "none" }}
     >
-      <Sky sunPosition={SUN} turbidity={4} rayleigh={1.1} mieCoefficient={0.006} />
+      <SkyDome />
+      <Clouds />
 
-      {/* Sky above, warm bounce off the field below. */}
-      <hemisphereLight args={["#bcd8f2", "#5c6b3a", 0.85]} />
-      <ambientLight intensity={0.18} />
+      {/* Sky above, warm bounce off the field below. Strong enough that a
+          shadow is a cooler, darker green and not a hole in the ground. */}
+      <hemisphereLight args={["#cfe4ff", "#8aa256", 1.25]} />
+      <ambientLight intensity={0.22} />
       <SunLight />
 
       <Environment />
       <Outside />
+      <Farm />
       <Pit />
       <GrassPatches />
       <Cow />
@@ -64,6 +73,129 @@ export default function Scene() {
       <DevBridge />
     </Canvas>
   );
+}
+
+/**
+ * The sky: a deep blue overhead paling to haze at the horizon, with the sun in
+ * it. A painted gradient rather than a physical sky model, because the
+ * physical one at this sun angle is a sheet of white — correct, and the reason
+ * the whole game looked overcast.
+ *
+ * It rides along with the camera, so it is always the same distance away, and
+ * it goes through the same tone mapping as everything else so that the horizon
+ * comes out exactly the colour the fog fades the hills to.
+ */
+function SkyDome() {
+  const ref = useRef<THREE.Mesh>(null);
+  const mat = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: {
+          uSun: { value: SUN.clone().normalize() },
+          uHorizon: { value: new THREE.Color(HAZE) },
+          uMid: { value: new THREE.Color("#63a8ee") },
+          uZenith: { value: new THREE.Color("#1f63c8") },
+        },
+        vertexShader: `
+          varying vec3 vDir;
+          void main() {
+            vDir = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          uniform vec3 uSun;
+          uniform vec3 uHorizon;
+          uniform vec3 uMid;
+          uniform vec3 uZenith;
+          varying vec3 vDir;
+          void main() {
+            vec3 d = normalize(vDir);
+            float h = max(d.y, 0.0);
+            vec3 col = mix(uHorizon, uMid, smoothstep(0.0, 0.3, h));
+            col = mix(col, uZenith, smoothstep(0.22, 0.95, h));
+            float s = max(dot(d, uSun), 0.0);
+            // a warm bloom round the sun, and the disc itself
+            col += vec3(1.0, 0.86, 0.6) * (pow(s, 6.0) * 0.16 + pow(s, 90.0) * 0.5);
+            col += vec3(1.0, 0.97, 0.88) * smoothstep(0.9989, 0.9994, s) * 6.0;
+            gl_FragColor = vec4(col, 1.0);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }`,
+      }),
+    []
+  );
+  useFrame(({ camera }) => {
+    ref.current?.position.copy(camera.position);
+  });
+  return (
+    <mesh ref={ref} material={mat} renderOrder={-10} frustumCulled={false}>
+      <sphereGeometry args={[370, 32, 16]} />
+    </mesh>
+  );
+}
+
+/**
+ * Fair-weather clouds: heaps of white puffs with flat bottoms, drifting. One
+ * instanced mesh, lit by the same sun as the field so their tops are bright
+ * and their undersides are in shade.
+ */
+function Clouds() {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const geo = useMemo(() => new THREE.SphereGeometry(1, 12, 9), []);
+  const mat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: "#ffffff",
+        emissive: "#a9c1dc",
+        emissiveIntensity: 0.55,
+        roughness: 1,
+        fog: false,
+      }),
+    []
+  );
+  const matrices = useMemo(() => {
+    const r = rng(2024);
+    const out: THREE.Matrix4[] = [];
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    for (let c = 0; c < 22; c++) {
+      const a = (c / 22) * Math.PI * 2 + r() * 0.25;
+      const d = 110 + r() * 170;
+      const y = 58 + r() * 50;
+      const size = 9 + r() * 12;
+      const yaw = r() * Math.PI;
+      const puffs = 5 + Math.floor(r() * 5);
+      for (let i = 0; i < puffs; i++) {
+        // strung out along one line, biggest in the middle
+        const t = puffs === 1 ? 0 : i / (puffs - 1) - 0.5;
+        const along = t * size * 2.6;
+        const big = size * (1 - Math.abs(t) * 1.1) * (0.75 + r() * 0.45);
+        p.set(
+          Math.cos(a) * d + Math.cos(yaw) * along + (r() - 0.5) * size * 0.5,
+          y + big * 0.42,
+          Math.sin(a) * d + Math.sin(yaw) * along + (r() - 0.5) * size * 0.5
+        );
+        s.set(big, big * 0.62, big * 0.9);
+        out.push(m.clone().compose(p, q, s));
+      }
+    }
+    return out;
+  }, []);
+  useEffect(() => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    matrices.forEach((mat4, i) => mesh.setMatrixAt(i, mat4));
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [matrices]);
+  useFrame((_, delta) => {
+    if (ref.current) ref.current.rotation.y += Math.min(delta, 0.05) * 0.004;
+  });
+  return <instancedMesh ref={ref} args={[geo, mat, matrices.length]} frustumCulled={false} />;
 }
 
 /**
@@ -245,8 +377,8 @@ function SunLight() {
       <primitive object={target} />
       <directionalLight
         ref={ref}
-        color="#fff3dd"
-        intensity={2.1}
+        color="#fff0d2"
+        intensity={2.5}
         target={target}
         castShadow
         shadow-mapSize={[2048, 2048]}
@@ -272,6 +404,8 @@ function CameraRig() {
   const { camera, gl } = useThree();
   const focus = useRef(new THREE.Vector3(WAYPOINTS.penCentre.x, 1.05, WAYPOINTS.penCentre.z));
   const want = useMemo(() => new THREE.Vector3(), []);
+  /** How far out along its boom the camera is allowed to be, 0..1. */
+  const reach = useRef(1);
 
   useEffect(() => {
     resetBehind(cowState.facing);
@@ -308,12 +442,33 @@ function CameraRig() {
     }
 
     const off = framedOffset();
+
+    // Never inside a building or a tree trunk. Walk out along the boom from
+    // the cow and stop short of the first solid thing on it: the camera comes
+    // in close instead of showing the inside of a wall. In fast, out slowly,
+    // so brushing past a tree does not make the view pump.
+    let clear = 1;
+    const f = focus.current;
+    for (let i = 1; i <= 18; i++) {
+      const t = i / 18;
+      if (cameraBlocked(f.x + off.x * t, f.y + off.y * t, f.z + off.z * t)) {
+        clear = Math.max(0.04, (i - 1) / 18);
+        break;
+      }
+    }
+    reach.current +=
+      (clear - reach.current) * (clear < reach.current ? 1 - Math.pow(1e-7, dt) : 1 - Math.pow(0.08, dt));
+    const k = started ? reach.current : 1;
+    // Pinned right up against a wall there is no room behind the cow at all,
+    // so the camera goes up and looks down on it instead of sitting in its ear.
+    const lift = started ? (1 - THREE.MathUtils.smoothstep(reach.current, 0.08, 0.45)) * 2.1 : 0;
+
     // Impacts knock the camera about — a slap you can feel from behind the lens.
     const shake = stepShake(dt);
     camera.position.set(
-      focus.current.x + off.x + shake.x,
-      Math.max(0.5, focus.current.y + off.y + shake.y),
-      focus.current.z + off.z + shake.z
+      focus.current.x + off.x * k + shake.x,
+      Math.max(0.5, focus.current.y + off.y * k + lift + shake.y),
+      focus.current.z + off.z * k + shake.z
     );
     camera.lookAt(focus.current);
   });

@@ -8,11 +8,13 @@ import { cowJawGeo, cowSkinGeo } from "./cowBody";
 import { buildOfficer, OFFICER_BONES, type Frames } from "./officerBody";
 import { buildSheep } from "./sheepBody";
 import { buildScarecrow } from "./scarecrowBody";
+import { buildBull } from "./bullBody";
 
 export type SkinJob =
   | { kind: "cow" }
   | { kind: "sheep" }
   | { kind: "scarecrow" }
+  | { kind: "bull" }
   /** The officer is built around his own rig: each bone's rest matrix, as 16 numbers. */
   | { kind: "officer"; frames: number[][] };
 
@@ -29,6 +31,10 @@ export function runJob(job: SkinJob): THREE.BufferGeometry[] {
       return [cowSkinGeo(), cowJawGeo()];
     case "scarecrow":
       return [buildScarecrow()];
+    case "bull": {
+      const b = buildBull();
+      return [b.body, b.head];
+    }
     case "sheep": {
       const s = buildSheep();
       return [s.body, s.head];

@@ -9,11 +9,13 @@ export interface ScriptStep {
   t: number; // ms from gag start
   say?: string;
   /** Store fills `say` from the named pool, so the line differs each time. */
-  pool?: "insult" | "bellow" | "dance" | "bonk";
-  sound?: "smack" | "moo" | "chew" | "kiss" | "grunt" | "creak" | "slurp" | "bonk";
+  pool?: LinePool;
+  sound?: "smack" | "moo" | "chew" | "kiss" | "grunt" | "creak" | "slurp" | "bonk" | "knock";
   lips?: boolean; // stamp the lip mark on the screen
   /** Bumped counter the scarecrow watches, so a bellow knocks its hat off. */
   scare?: boolean;
+  /** The moment a headbutt lands on whatever the cow is knocking on. */
+  hit?: boolean;
 }
 
 export interface GagDef {
@@ -246,7 +248,43 @@ const dazed = (side: number): Pose => ({
   tail: { rot: [0.25, 0, 0] },
 });
 
+/** Head down and driven forward: a cow's way of knocking on a door. */
+const BUTT: Pose = {
+  head: { rot: [0.5, 0, 0], pos: [0, -0.1, 0.2] },
+  body: { pos: [0, -0.01, 0.12], rot: [0.05, 0, 0] },
+  earL: { rot: [-0.5, 0, 0.3] },
+  earR: { rot: [-0.5, 0, -0.3] },
+  legBL: { rot: [0.12, 0, 0] },
+  legBR: { rot: [0.12, 0, 0] },
+  tail: { rot: [-0.4, 0, 0] },
+};
+/** Drawn back for it. */
+const WINDUP: Pose = {
+  head: { rot: [0.2, 0, 0], pos: [0, 0, -0.08] },
+  body: { pos: [0, 0, -0.1], rot: [-0.03, 0, 0] },
+};
+
 export const gags: Record<string, GagDef> = {
+  // Knocking, cow-style: two headbutts. Used on the portaloo door and on the
+  // apple tree; what happens next is the store's business.
+  knock: {
+    id: "knock",
+    duration: 1050,
+    keyframes: [
+      { t: 0, pose: {} },
+      { t: 150, pose: WINDUP },
+      { t: 260, pose: BUTT },
+      { t: 430, pose: WINDUP },
+      { t: 560, pose: BUTT },
+      { t: 760, pose: { head: { rot: [-0.1, 0, 0] } } },
+      { t: 1000, pose: {} },
+    ],
+    script: [
+      { t: 250, sound: "knock" },
+      { t: 550, sound: "knock", hit: true },
+    ],
+  },
+
   bonk: {
     id: "bonk",
     duration: 2500,
@@ -294,7 +332,7 @@ export const gags: Record<string, GagDef> = {
       { t: 1550, sound: "chew" },
       { t: 2150, sound: "chew" },
       { t: 2750, sound: "chew" },
-      { t: 3100, say: "Mmm. Okay, you're alright.", sound: "moo" },
+      { t: 3100, pool: "eat", sound: "moo" },
     ],
   },
 
@@ -315,12 +353,12 @@ export const gags: Record<string, GagDef> = {
       { t: 3400, pose: {} },
     ],
     script: [
-      { t: 0, say: "Moooo~", sound: "moo" },
+      { t: 0, pool: "petted", sound: "moo" },
       // the jingle's smooch pop lands exactly on contact
       { t: 910, sound: "kiss" },
       { t: KISS_CONTACT, lips: true },
-      { t: KISS_CONTACT + 60, say: "Mwah." },
-      { t: KISS_BACK, say: "You've got a little something. Right there." },
+      { t: KISS_CONTACT + 60, pool: "kiss" },
+      { t: KISS_BACK, pool: "kissAfter" },
     ],
   },
 
@@ -342,7 +380,7 @@ export const gags: Record<string, GagDef> = {
     script: [
       { t: SLAP_IMPACT, sound: "smack" },
       { t: SLAP_IMPACT + 90, sound: "grunt" },
-      { t: 980, pool: "insult" },
+      { t: 980, pool: "slap1" }, // the store swaps in slap2/slap3 as the count rises
     ],
   },
   // Shouted at the scarecrow. The gag itself is two seconds of noise; what it
@@ -404,56 +442,223 @@ export const gags: Record<string, GagDef> = {
       { t: 500, sound: "slurp" },
       { t: 1200, sound: "slurp" },
       { t: 1900, sound: "slurp" },
-      { t: 2900, say: "Tastes like frog. Ten out of ten." },
+      { t: 2900, pool: "sip" },
     ],
   },
 };
 
-/** Said on the way up into the dance. It did not need asking twice. */
-export const danceLines = [
-  "Oh, you want the dance? Fine.",
-  "Watch the hooves.",
-  "This is a limited engagement.",
-  "You have no idea how hard this is on four legs.",
-  "Nobody asked, but here we are.",
-];
+// ---------------------------------------------------------------------------
+// what the cow says
+//
+// Every activity draws from a list rather than saying one fixed line, because
+// the fifth "Mmm. Okay, you're alright." is not a joke any more. Lines are
+// dealt like a shuffled deck (see `pick`): every line in a list comes up once
+// before any of them comes up again.
+// ---------------------------------------------------------------------------
 
-/** Said, eventually, after running into something at full gallop. */
-export const bonkLines = [
-  "Who put that there.",
-  "I meant to do that.",
-  "Ow. My entire face.",
-  "Nobody saw that. Nobody saw that.",
-  "Cows should come with brakes.",
-  "I can hear colours.",
-];
+export const LINES = {
+  /** Finishing a mouthful of grass. */
+  eat: [
+    "Mmm. Okay, you're alright.",
+    "Bit dry. Needs ketchup.",
+    "Tastes green.",
+    "I'll be chewing that for the next nine hours.",
+    "Stomach one says yes. Stomach three has questions.",
+    "Grass again. What a surprise. Love it.",
+    "Five stars. Would trample again.",
+    "That's breakfast. Next: second breakfast.",
+    "Don't watch me eat. It's rude.",
+    "Organic, locally sourced, stepped on.",
+  ],
+  /** The moment the pet lands, before the kiss. */
+  petted: ["Moooo~", "Oh! Hello.", "Oh, you.", "Stop it. Don't stop it.", "Hehe. Again.", "Mooo? Moo."],
+  /** Lips on the glass. */
+  kiss: ["Mwah.", "Smooch.", "MWAH.", "Mmmwah!", "*schlorp*"],
+  /** Backing off from the screen again. */
+  kissAfter: [
+    "You've got a little something. Right there.",
+    "Don't wipe it off. It's a souvenir.",
+    "That's what you get for petting a cow.",
+    "Sorry about the screen. Not sorry.",
+    "You'll be finding cow spit on that for weeks.",
+    "That's the most action this field has seen all year.",
+    "Wipe that. Actually, leave it.",
+  ],
+  /** Coming up from the pond. */
+  sip: [
+    "Tastes like frog. Ten out of ten.",
+    "There was definitely a tadpole in that.",
+    "Refreshing. Slightly crunchy.",
+    "Ahh. Pond water. The good stuff.",
+    "Hydrated. Mostly with duck.",
+    "That's my eight glasses for the day.",
+    "Ahh. Notes of mud.",
+  ],
+  /**
+   * Slapped, with the middle hoof up. One list per slap so the cow gets
+   * angrier as it goes — and the third one warns you what the fourth will do.
+   */
+  slap1: [
+    "Did you just— wow.",
+    "Wow. Okay.",
+    "Real mature.",
+    "Rude.",
+    "Excuse me??",
+    "Guess what this is.",
+  ],
+  slap2: [
+    "Try doing that again.",
+    "Do that again, I dare you.",
+    "That's assault.",
+    "Yeah. Read it and weep.",
+    "Bet you thought I didn't have one of these.",
+    "You piece of shit.",
+  ],
+  slap3: [
+    "One more. ONE more and I'm calling someone.",
+    "I know people. Uniformed people.",
+    "Keep going. See what happens.",
+    "I have a lawyer. He's a goat, but he's good.",
+    "That's three. I'm counting.",
+  ],
+  /** On the way up into the dance. It did not need asking twice. */
+  dance: [
+    "Oh, you want the dance? Fine.",
+    "Watch the hooves.",
+    "This is a limited engagement.",
+    "You have no idea how hard this is on four legs.",
+    "Nobody asked, but here we are.",
+    "Hit it.",
+    "I've been practising.",
+    "Don't film this. Okay, film this.",
+  ],
+  /** Some time after running into something at full gallop. */
+  bonk: [
+    "Who put that there.",
+    "I meant to do that.",
+    "Ow. My entire face.",
+    "Nobody saw that. Nobody saw that.",
+    "Cows should come with brakes.",
+    "I can hear colours.",
+    "Which one of you moved.",
+    "Seven out of ten. Would bonk again.",
+    "That was a load-bearing face.",
+  ],
+  /** To a camera that has just photographed it. */
+  ticket: [
+    "Was that a camera? Did it get my good side?",
+    "I demand a retake.",
+    "That wasn't me. Different cow.",
+    "Speed limit? I'm a COW.",
+    "Put it on my tab.",
+    "Worth it.",
+    "I was blinking. Do it again.",
+    "Can I get that framed?",
+    "Pay it in what, MILK?",
+  ],
+  /** At a scarecrow. It is not a conversation. */
+  bellow: [
+    "MOOOO! …Nothing. Coward.",
+    "It flinched. You saw that.",
+    "That's right. Keep still.",
+    "Straw man. Literally.",
+    "And STAY scared.",
+    "Nice hat. Shame if something happened to it.",
+    "Who's scary now, eh?",
+  ],
+  /** At the bull, who could not care less. */
+  bull: [
+    "MOO! …He's not even looking.",
+    "Oi. OI. Big lad.",
+    "I know you can hear me.",
+    "Rude. And I know rude.",
+    "Nice ring. Very 2009.",
+    "We're practically cousins!",
+    "Fine. Be like that.",
+  ],
+  /** What the bull says back, when he says anything. */
+  bullSays: [
+    "…",
+    "No.",
+    "I'm on my lunch.",
+    "Do I know you?",
+    "Talk to my agent.",
+    "I don't speak to dairy.",
+    "Moo quieter.",
+    "This is a private field.",
+  ],
+  /** From inside the portaloo. */
+  looSays: ["OCCUPIED!", "STILL occupied!", "Do you MIND?", "Read a book or something!"],
+  /** The cow, looking into a now-empty portaloo. */
+  looFree: [
+    "It's free. I don't fit.",
+    "He did not flush.",
+    "There's wool everywhere.",
+    "No paper. Typical.",
+    "I'll hold it.",
+  ],
+  /** An apple, on the head, from a height. */
+  apple: [
+    "Ow. Gravity. Noted.",
+    "Newton had this coming too.",
+    "An apple a day. Straight to the skull.",
+    "I asked for ONE apple. Gently.",
+    "That tree's got an arm on it.",
+    "Worth it. Probably.",
+  ],
+  /** Just after a sheep goes flying. */
+  bowl: [
+    "STRIKE!",
+    "Sorry! Not sorry.",
+    "Fore!",
+    "He'll be fine. Probably.",
+    "Sheep can fly. Who knew.",
+    "Ten points.",
+    "Wool you look at that.",
+  ],
+  /** A sheep walks into the pen. */
+  herd: [
+    "Welcome to the pen. The food's terrible.",
+    "Inmate number two.",
+    "Get in there.",
+    "Who's a good sheep. You are. Now stay.",
+  ],
+  /** Rearing up, after the fourth slap. */
+  lastStraw: ["Right. RIGHT. That's it.", "That's IT.", "Okay. OKAY. You asked for this."],
+  /** Marching off to the station. */
+  march: ["I'm reporting this.", "You'll be hearing from the authorities.", "I'm getting a restraining order."],
+  /** Back down on four legs at the end of the trip. */
+  settle: ["Don't. Just don't.", "Not one word.", "I'm watching you."],
+} satisfies Record<string, string[]>;
 
-/** What the cow says to a camera that has just photographed it. */
-export const ticketLines = [
-  "Was that a camera? Did it get my good side?",
-  "I demand a retake.",
-  "That wasn't me. Different cow.",
-  "Speed limit? I'm a COW.",
-  "Put it on my tab.",
-  "Worth it.",
-];
+export type LinePool = keyof typeof LINES;
 
-/** What the cow shouts at a scarecrow. It is not a conversation. */
-export const bellowLines = [
-  "MOOOO! …Nothing. Coward.",
-  "It flinched. You saw that.",
-  "That's right. Keep still.",
-  "Straw man. Literally.",
-];
+const decks = new Map<string, number[]>();
+const lastDealt = new Map<string, number>();
 
-export const insultLines = [
-  "Try doing that again.",
-  "You piece of shit.",
-  "Real mature.",
-  "Do that again, I dare you.",
-  "Wow. Okay.",
-  "That's assault.",
-  "Guess what this is.",
-  "Yeah. Read it and weep.",
-  "Bet you thought I didn't have one of these.",
-];
+/**
+ * The next line from a list, dealt like a shuffled deck: everything comes up
+ * once before anything comes up twice, and the last card of one deck is never
+ * the first of the next, so no line is ever said twice in a row.
+ */
+export function pick<T>(key: string, list: readonly T[]): T {
+  if (list.length <= 1) return list[0];
+  let deck = decks.get(key);
+  if (!deck || deck.length === 0 || deck.some((i) => i >= list.length)) {
+    deck = list.map((_, i) => i);
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    // dealt from the end
+    if (deck[deck.length - 1] === lastDealt.get(key)) [deck[0], deck[deck.length - 1]] = [deck[deck.length - 1], deck[0]];
+    decks.set(key, deck);
+  }
+  const i = deck.pop()!;
+  lastDealt.set(key, i);
+  return list[i];
+}
+
+export function pickLine(pool: LinePool): string {
+  return pick(pool, LINES[pool]);
+}

@@ -15,6 +15,7 @@ import { addPoses, Pose, PoseKey, samplePose } from "./poses";
 import { bipedWalk, standPose } from "./locomotion";
 import { approach, cowState, turnToward } from "./cowState";
 import { OFFICER, PIT_OUTER, PIT_RADIUS, SLAPS_BEFORE_POLICE, WAYPOINTS } from "./world";
+import { pick, pickLine } from "./reactions";
 
 const NUMBER = ["ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT"];
 
@@ -30,7 +31,7 @@ export type Phase =
   | "settle"
   | "done";
 
-export type Speaker = "cow" | "officer";
+export type Speaker = "cow" | "officer" | "bull" | "loo";
 
 const ANGRY_SPEED = 2.6;
 const HOME_SPEED = 2.5;
@@ -200,10 +201,45 @@ const COMPLAINT: Beat[] = [
   },
 ];
 
+/** How many beats the complaint has before any talk of tickets. */
+const COMPLAINT_LENGTH = COMPLAINT.length;
+
+/**
+ * The bits of the complaint that change from one visit to the next. The
+ * gestures stay put — they belong to the beat — but a cow that goes back a
+ * second time should not get the same conversation word for word.
+ */
+const OPENERS = [
+  "Officer. I'd like to report an assault.",
+  "Officer. I wish to report a crime.",
+  "Officer! I've been ASSAULTED.",
+];
+const FOR_THE_RECORD = ["I want it on the record.", "I want it in writing.", "I want a full investigation."];
+/** What he asks, and what the cow says back. */
+const EXCHANGES: [string, string][] = [
+  ["…Uh huh. And you are a cow.", "That is EXACTLY my point."],
+  ["Did you get a look at the suspect?", "A HAND. A giant hand. From the SKY."],
+  ["Have you tried not standing there?", "It's MY field!"],
+  ["And were you provoking the hand?", "I was EATING!"],
+];
+const VERDICTS = [
+  "Right. I'll file it under livestock dispute.",
+  "I'll put out an alert for a large hand.",
+  "Noted. In pencil.",
+  "We'll send someone round. Eventually. Probably not.",
+];
+
 function complaint(tickets: number): Beat[] {
-  if (tickets <= 0) return COMPLAINT;
+  const [question, answer] = pick("exchange", EXCHANGES);
+  const beats = COMPLAINT.map((b) => ({ ...b }));
+  beats[0].line = pick("opener", OPENERS);
+  beats[3].line = pick("record", FOR_THE_RECORD);
+  beats[4].line = question;
+  beats[5].line = answer;
+  beats[6].line = pick("verdict", VERDICTS);
+  if (tickets <= 0) return beats;
   return [
-    ...COMPLAINT,
+    ...beats,
     {
       who: "officer",
       line:
@@ -339,7 +375,7 @@ export function stepCutscene(runner: CutsceneRunner, dt: number): StepResult {
       cowState.stand = approach(cowState.stand, 1, dt / 0.9);
       if (runner.said < 0) {
         runner.said = 0;
-        speak("Right. RIGHT. That's it.");
+        speak(pickLine("lastStraw"));
       }
       // The player can let the cow out now, so it may already be in the field
       // when the fifth slap lands. No point walking back in to walk out again.
@@ -368,7 +404,7 @@ export function stepCutscene(runner: CutsceneRunner, dt: number): StepResult {
     case "toStation":
       if (runner.t > 400 && runner.said < 0) {
         runner.said = 0;
-        speak("I'm reporting this.");
+        speak(pickLine("march"));
       }
       if (runner.via) {
         if (seek(runner.via.x, runner.via.z, ANGRY_SPEED, dt)) runner.via = null;
@@ -413,7 +449,11 @@ export function stepCutscene(runner: CutsceneRunner, dt: number): StepResult {
       if (runner.t > 300 && runner.said < 0) {
         runner.said = 0;
         // A cow that just withdrew its complaint has a different walk home.
-        speak(runner.beats.length > COMPLAINT.length ? "We will never speak of this." : "They're looking into it.");
+        speak(
+          runner.beats.length > COMPLAINT_LENGTH
+            ? pick("homeTicket", ["We will never speak of this.", "That went well.", "Nobody tell the sheep."])
+            : pick("home", ["They're looking into it.", "Justice. Sort of.", "He wrote it down. On a napkin."])
+        );
       }
       if (seek(WAYPOINTS.gateOutside.x, WAYPOINTS.gateOutside.z, HOME_SPEED, dt) && quiet()) {
         next("backInside");
@@ -423,7 +463,11 @@ export function stepCutscene(runner: CutsceneRunner, dt: number): StepResult {
     case "backInside":
       if (runner.t > 500 && runner.said < 0) {
         runner.said = 0;
-        speak(runner.beats.length > COMPLAINT.length ? "Bales. Of. HAY." : "Case number and everything.");
+        speak(
+          runner.beats.length > COMPLAINT_LENGTH
+            ? pick("homeTicket2", ["Bales. Of. HAY.", "How many bales is a cow worth.", "I'm moving to another field."])
+            : pick("home2", ["Case number and everything.", "Livestock dispute. LIVESTOCK.", "Put that in your pipe."])
+        );
       }
       if (seek(WAYPOINTS.penCentre.x, WAYPOINTS.penCentre.z, HOME_SPEED, dt) && quiet()) {
         next("closeGate");
@@ -445,7 +489,7 @@ export function stepCutscene(runner: CutsceneRunner, dt: number): StepResult {
       cowState.stand = approach(cowState.stand, 0, dt / 0.7);
       if (cowState.stand <= 0 && runner.said < 0) {
         runner.said = 0;
-        speak("Don't. Just don't.");
+        speak(pickLine("settle"));
       }
       if (cowState.stand <= 0 && quiet()) next("done");
       break;

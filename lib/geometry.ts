@@ -181,14 +181,16 @@ export function bladeGeometry(
   height: number,
   width: number,
   bend: number,
-  segs = 4
+  segs = 4,
+  rootHex = "#2c6320",
+  tipHex = "#93d158"
 ): THREE.BufferGeometry {
   const pos: number[] = [];
   const col: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
-  const root = new THREE.Color("#2c6320");
-  const tip = new THREE.Color("#93d158");
+  const root = new THREE.Color(rootHex);
+  const tip = new THREE.Color(tipHex);
   const c = new THREE.Color();
 
   for (let i = 0; i <= segs; i++) {

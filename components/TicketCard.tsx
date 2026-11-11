@@ -30,7 +30,7 @@ export default function TicketCard({ touch }: { touch: boolean }) {
     <div
       className={`ticket-in pointer-events-auto absolute ${
         touch
-          ? "top-14 right-3 w-[min(19rem,86vw)] short:top-3 short:right-16 short:w-[24rem]"
+          ? "top-14 right-3 w-[min(19rem,86vw)] short:top-14 short:right-3 short:w-[24rem]"
           : "top-20 right-5 w-[19rem]"
       }`}
       onClick={dismiss}

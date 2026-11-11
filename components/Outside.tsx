@@ -5,7 +5,7 @@
  *
  * The pen was the whole game until the gate opened, so this file is the reward
  * for getting out of it: a scarecrow to shout at, a pond to drink out of, a
- * speed camera on the road, and a flock of sheep that want nothing to do with
+ * speed camera down the pond lane, and a flock of sheep that want nothing to do with
  * any of it.
  *
  * Two rules hold the whole file together:
@@ -36,12 +36,15 @@ import {
   MPH,
   PIT_RADIUS,
   POND,
+  PORTALOO,
   resolveFence,
   resolveSolids,
   SCARECROW,
   SHEEP_HOME,
   SPEED_SIGN,
   SPEED_TRAP,
+  SPEED_TRAP_FACE,
+  LANE,
 } from "@/lib/world";
 
 // ---------------------------------------------------------------------------
@@ -472,7 +475,7 @@ function SpeedCamera() {
     const H = Math.min(360, ctx.drawingBufferHeight);
     const at = new THREE.Vector3(cowState.x, 0.78 + cowState.stand * 0.5, cowState.z);
     // just in front of the lens, not inside the box it lives in
-    const face = Math.atan2(-SPEED_TRAP.z, -SPEED_TRAP.x);
+    const face = SPEED_TRAP_FACE;
     lens.position.set(SPEED_TRAP.x + Math.sin(face) * 0.45, 2.2, SPEED_TRAP.z + Math.cos(face) * 0.45);
     const d = lens.position.distanceTo(at);
     // zoom to fill the frame with cow, however close it came
@@ -545,9 +548,8 @@ function SpeedCamera() {
     if (t > 0.4) firedAt.current = -1;
   });
 
-  // Turned to look back down the road at the pen, which is where the cow is
-  // coming from.
-  const face = Math.atan2(-SPEED_TRAP.z, -SPEED_TRAP.x);
+  // Turned to look back up the lane, which is where the cow is coming from.
+  const face = SPEED_TRAP_FACE;
 
   return (
     <group>
@@ -570,22 +572,22 @@ function SpeedCamera() {
             <boxGeometry args={[0.2, 0.1, 0.2]} />
           </mesh>
         </group>
-        {/* the measuring lines painted across the track */}
+        {/* the measuring lines painted across the lane */}
         {[-1.2, -0.6, 0.0, 0.6, 1.2].map((d) => (
           <mesh
             key={d}
             rotation={[-Math.PI / 2, 0, 0]}
-            position={[d, 0.024, -SPEED_TRAP.z]}
+            position={[LANE.x - SPEED_TRAP.x, 0.024, d]}
             material={mats.paint}
           >
-            <planeGeometry args={[0.14, 2.6]} />
+            <planeGeometry args={[LANE.w - 0.2, 0.14]} />
           </mesh>
         ))}
       </group>
 
-      {/* The posted limit, on the way TO the camera, facing the cow coming
-          out of the pen — so the rule is there to be read before it is broken. */}
-      <group position={[SPEED_SIGN.x, 0, SPEED_SIGN.z]} rotation={[0, -Math.PI / 2, 0]}>
+      {/* The posted limit, at the top of the lane and facing the road — so the
+          rule is there to be read before it is broken. */}
+      <group position={[SPEED_SIGN.x, 0, SPEED_SIGN.z]} rotation={[0, -0.4, 0]}>
         <mesh position={[0, 0.95, 0]} material={mats.post} castShadow>
           <cylinderGeometry args={[0.035, 0.045, 1.9, 8]} />
         </mesh>
@@ -647,6 +649,8 @@ interface SheepState {
   dazed: number;
   /** Seconds it has been running flat out. Sheep are sprinters, not stayers. */
   run: number;
+  /** Not out yet: this one is in the portaloo, and stays there until evicted. */
+  hidden: boolean;
 }
 
 const flock: SheepState[] = (() => {
@@ -675,9 +679,12 @@ const flock: SheepState[] = (() => {
       spinRate: 0,
       dazed: 0,
       run: 0,
+      hidden: false,
     };
   });
 })();
+// One more, who is not in the field. See `Portaloo` in components/Farm.tsx.
+flock.push({ ...flock[0], x: PORTALOO.x, z: PORTALOO.z, homeX: PORTALOO.x, homeZ: PORTALOO.z, hidden: true });
 
 /** A leg: dark, thin, pivoting at the top so it can trot. */
 const SHEEP_LEG = new THREE.CapsuleGeometry(0.027, 0.3, 4, 8).translate(0, -0.17, 0);
@@ -727,8 +734,31 @@ function Sheep() {
     const dt = Math.min(delta, 0.05);
     const t = state.clock.elapsedTime;
 
+    const evicted = useCowStore.getState().looSeq >= 3;
     for (let i = 0; i < flock.length; i++) {
       const s = flock[i];
+      if (s.hidden) {
+        const g = groups.current[i];
+        if (g) g.visible = false;
+        if (!evicted) continue;
+        // Out of the door like a cork, at whoever was knocking.
+        s.hidden = false;
+        if (g) g.visible = true;
+        const fx = Math.sin(PORTALOO.face);
+        const fz = Math.cos(PORTALOO.face);
+        s.x = PORTALOO.x + fx * 0.5;
+        s.z = PORTALOO.z + fz * 0.5;
+        s.y = 0.5;
+        s.vx = fx * 5.5 + (Math.random() - 0.5) * 2;
+        s.vz = fz * 5.5 + (Math.random() - 0.5) * 2;
+        s.vy = 6.5;
+        s.airborne = true;
+        s.outside = true;
+        s.spinRate = 11;
+        s.facing = PORTALOO.face;
+        baa();
+        yeet();
+      }
       const dx = s.x - cowState.x;
       const dz = s.z - cowState.z;
       const d = Math.hypot(dx, dz);
@@ -750,6 +780,7 @@ function Sheep() {
         const store = useCowStore.getState();
         store.bumpStat("sheep");
         store.complete("bowl");
+        store.quip("bowl");
       }
 
       let speed = 0;
@@ -831,7 +862,10 @@ function Sheep() {
         const fence = resolveFence(s.x, s.z, s.outside, cowState.gateOpen);
         s.x = fence.x;
         s.z = fence.z;
-        if (!fence.outside && s.outside) useCowStore.getState().complete("herd");
+        if (!fence.outside && s.outside) {
+          useCowStore.getState().complete("herd");
+          useCowStore.getState().quip("herd");
+        }
         s.outside = fence.outside;
         // ...and trees, and the station, or a herded flock ends up inside one
         const clear = resolveSolids(s.x, s.z);

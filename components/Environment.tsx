@@ -14,10 +14,35 @@ import {
 } from "@/lib/textures";
 import InstancedGroup, { type Placement } from "./Instanced";
 import { applySway, wind } from "@/lib/sway";
-import { OBSTACLES, PIT_RADIUS, POND, STATION, TREES } from "@/lib/world";
+import {
+  APPLE_TREE,
+  BULL_PEN,
+  LANE,
+  OBSTACLES,
+  PIT_RADIUS,
+  POND,
+  PORTALOO,
+  STATION,
+  TREES,
+  WALL_RADIUS,
+} from "@/lib/world";
 
-/** How far out the ground plane and the loose grass go. Beyond that: hills and haze. */
-const FIELD_RADIUS = 34;
+/** How far out the loose grass goes: up to the foot of the stone wall. */
+const FIELD_RADIUS = WALL_RADIUS - 0.5;
+/** The ground itself carries on a long way past that, under the barn and out to the hills. */
+const GROUND_SIZE = 460;
+
+/** A canvas texture, drawn once. */
+function paintTexture(w: number, h: number, draw: (g: CanvasRenderingContext2D, w: number, h: number) => void) {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  draw(c.getContext("2d")!, w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
 
 /** Advances the one wind clock. Mounted once, by `Environment`. */
 function WindClock() {
@@ -32,22 +57,52 @@ function WindClock() {
 // ---------------------------------------------------------------------------
 
 function Ground() {
-  const mat = useMemo(
-    () =>
-      new THREE.MeshStandardMaterial({
-        map: fieldMap(),
-        bumpMap: groundBump(),
-        bumpScale: 0.35,
-        roughness: 0.95,
-        metalness: 0,
-      }),
-    []
-  );
-  return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow material={mat}>
-      <planeGeometry args={[180, 180]} />
-    </mesh>
-  );
+  const mat = useMemo(() => {
+    // The same painted field as before, tiled at the same size underfoot —
+    // the plane is just much bigger now, so it needs more repeats.
+    const tile = (t: THREE.Texture) => {
+      const c = t.clone();
+      c.repeat.multiplyScalar(GROUND_SIZE / 180);
+      c.needsUpdate = true;
+      return c;
+    };
+    return new THREE.MeshStandardMaterial({
+      map: tile(fieldMap()),
+      bumpMap: tile(groundBump()),
+      bumpScale: 0.35,
+      roughness: 0.95,
+      metalness: 0,
+      vertexColors: true,
+    });
+  }, []);
+
+  // One tiled texture over a whole field reads as a carpet however good the
+  // texture is. Broad, slow drifts of colour laid over it by vertex — lusher
+  // here, sun-bleached there — are what make it read as land.
+  const geo = useMemo(() => {
+    const g = new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE, 120, 120);
+    const p = g.getAttribute("position");
+    const col = new Float32Array(p.count * 3);
+    const lush = new THREE.Color(0.9, 1.04, 0.84);
+    const dry = new THREE.Color(1.12, 1.07, 0.86);
+    const c = new THREE.Color();
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i);
+      const y = p.getY(i);
+      const n =
+        Math.sin(x * 0.07 + 1.3) * Math.cos(y * 0.06 - 0.4) * 0.5 +
+        Math.sin(x * 0.19 + y * 0.13) * 0.3 +
+        Math.sin(x * 0.031 - y * 0.043 + 2) * 0.4;
+      c.copy(lush).lerp(dry, THREE.MathUtils.clamp(0.5 + n * 0.55, 0, 1));
+      col[i * 3] = c.r;
+      col[i * 3 + 1] = c.g;
+      col[i * 3 + 2] = c.b;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    return g;
+  }, []);
+
+  return <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow material={mat} geometry={geo} />;
 }
 
 /**
@@ -74,16 +129,29 @@ function Road() {
   const from = PIT_RADIUS - 0.6;
   const to = STATION.x - 1.6;
   const len = to - from;
+  // the pond lane: overlaps the road at the top, runs out into the mud at the bottom
+  const laneTop = LANE.z0 + 1.2;
+  const laneLen = laneTop - LANE.z1 + 0.6;
 
   return (
-    <mesh
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[(from + to) / 2, 0.012, 0]}
-      material={mat}
-      receiveShadow
-    >
-      <planeGeometry args={[len, 3.4]} />
-    </mesh>
+    <>
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[(from + to) / 2, 0.012, 0]}
+        material={mat}
+        receiveShadow
+      >
+        <planeGeometry args={[len, 3.4]} />
+      </mesh>
+      <mesh
+        rotation={[-Math.PI / 2, 0, Math.PI / 2]}
+        position={[LANE.x, 0.01, laneTop - laneLen / 2]}
+        material={mat}
+        receiveShadow
+      >
+        <planeGeometry args={[laneLen, LANE.w + 0.4]} />
+      </mesh>
+    </>
   );
 }
 
@@ -129,9 +197,14 @@ function Ruts() {
 function isBare(x: number, z: number): boolean {
   if (Math.hypot(x, z) < PIT_RADIUS - 0.35) return true; // the pen floor
   if (Math.abs(z) < 1.6 && x > PIT_RADIUS - 1 && x < STATION.x - 1) return true; // the road
+  if (Math.abs(x - LANE.x) < LANE.w / 2 && z < LANE.z0 + 0.5 && z > LANE.z1 - 0.5) return true; // the pond lane
   if (Math.abs(x - STATION.x) < 4 && Math.abs(z) < 4.5) return true; // the station yard
   // the pond, and the trodden mud round the edge of it
   if (Math.hypot(x - POND.x, z - POND.z) < POND.r + 0.6) return true;
+  // the bull has trodden his paddock flat
+  if (Math.hypot(x - BULL_PEN.x, z - BULL_PEN.z) < 2.2) return true;
+  if (Math.hypot(x - PORTALOO.x, z - PORTALOO.z) < 0.95) return true;
+  if (Math.hypot(x - APPLE_TREE.x, z - APPLE_TREE.z) < 0.5) return true;
   return false;
 }
 
@@ -140,8 +213,11 @@ function isBare(x: number, z: number): boolean {
  * as an InstancedMesh, and the whole reason the ground stops looking like a
  * painted plane: from the cow's eye height you can see individual blades move.
  */
-function GrassField({ count = 15000 }: { count?: number }) {
-  const geo = useMemo(() => bladeGeometry(0.34, 0.05, 0.1, 4), []);
+function GrassField({ count = 34000 }: { count?: number }) {
+  // Rooted in the colour of the ground it stands on and lightening to the
+  // tip. The roots used to be far darker than the field, so from any distance
+  // the meadow read as a lawn with black thorns growing out of it.
+  const geo = useMemo(() => bladeGeometry(0.3, 0.075, 0.11, 3, "#4c8a33", "#b4e26c"), []);
   const mat = useMemo(
     () =>
       applySway(
@@ -165,18 +241,32 @@ function GrassField({ count = 15000 }: { count?: number }) {
     const scale = new THREE.Vector3();
     const out: THREE.Matrix4[] = [];
     let guard = 0;
+    // Grass grows in tufts, not in an even scatter: most blades are planted
+    // beside the last "seed" rather than somewhere new.
+    let sx = 0;
+    let sz = 0;
+    let tuft = 1;
     while (out.length < count && guard++ < count * 6) {
-      // denser near the pen, thinning out towards the haze
-      const a = r() * Math.PI * 2;
-      const d = Math.pow(r(), 0.62) * FIELD_RADIUS;
-      const x = Math.cos(a) * d;
-      const z = Math.sin(a) * d;
-      if (isBare(x, z)) continue;
-      const h = 0.6 + r() * 0.85;
+      let x: number;
+      let z: number;
+      if (out.length > 0 && r() < 0.72) {
+        const a = r() * Math.PI * 2;
+        const d = r() * 0.3;
+        x = sx + Math.cos(a) * d;
+        z = sz + Math.sin(a) * d;
+      } else {
+        const a = r() * Math.PI * 2;
+        const d = Math.pow(r(), 0.56) * FIELD_RADIUS;
+        x = sx = Math.cos(a) * d;
+        z = sz = Math.sin(a) * d;
+        tuft = 0.55 + r() * 0.75;
+      }
+      if (isBare(x, z) || Math.hypot(x, z) > FIELD_RADIUS) continue;
+      const h = tuft * (0.6 + r() * 0.6);
       pos.set(x, -0.01, z);
-      e.set((r() - 0.5) * 0.35, r() * Math.PI * 2, (r() - 0.5) * 0.35);
+      e.set((r() - 0.5) * 0.5, r() * Math.PI * 2, (r() - 0.5) * 0.5);
       q.setFromEuler(e);
-      scale.set(0.7 + r() * 0.6, h, 1);
+      scale.set(0.8 + r() * 0.7, h, 1);
       out.push(m.clone().compose(pos, q, scale));
     }
     return out;
@@ -200,7 +290,7 @@ function GrassField({ count = 15000 }: { count?: number }) {
 
 /** Buttercups and daisies, scattered where the grass is thickest. */
 function Flowers() {
-  const geo = useMemo(() => new THREE.SphereGeometry(0.035, 6, 5), []);
+  const geo = useMemo(() => new THREE.SphereGeometry(0.048, 6, 5), []);
   const white = useMemo(
     () => new THREE.MeshStandardMaterial({ color: "#f6f2e2", roughness: 0.8 }),
     []
@@ -215,7 +305,7 @@ function Flowers() {
     const warm: Placement[] = [];
     const cool: Placement[] = [];
     let guard = 0;
-    while (warm.length + cool.length < 240 && guard++ < 3000) {
+    while (warm.length + cool.length < 420 && guard++ < 5000) {
       const a = r() * Math.PI * 2;
       const d = 3 + Math.pow(r(), 0.7) * (FIELD_RADIUS - 4);
       const x = Math.cos(a) * d;
@@ -255,7 +345,7 @@ interface TreeParts {
  * foliage. Four variants are built and then reused at different scales — the
  * silhouette is what makes them read as different trees, not the leaf count.
  */
-function buildTree(seed: number): TreeParts {
+export function buildTree(seed: number): TreeParts {
   const r = rng(seed);
   // Shorter and thicker than the first pass: a tall bare pole with a ball on top
   // is a lollipop, not a tree. The crown has to start low enough that the trunk
@@ -469,69 +559,169 @@ function Trough({ position }: { position: [number, number, number] }) {
   );
 }
 
+/** Straw laid round the bale, and the spiral it was rolled up in. */
+let baleMaps: { side: THREE.Texture; end: THREE.Texture } | null = null;
+function hayMaps() {
+  if (baleMaps) return baleMaps;
+  const r = rng(808);
+  const straw = (g: CanvasRenderingContext2D, n: number, draw: (i: number) => void) => {
+    for (let i = 0; i < n; i++) {
+      const light = r() > 0.45;
+      g.strokeStyle = light
+        ? `rgba(${236 + r() * 19}, ${214 + r() * 26}, ${140 + r() * 40}, ${0.25 + r() * 0.4})`
+        : `rgba(${120 + r() * 30}, ${92 + r() * 24}, ${40 + r() * 20}, ${0.2 + r() * 0.35})`;
+      g.lineWidth = 0.8 + r() * 1.6;
+      g.beginPath();
+      draw(i);
+      g.stroke();
+    }
+  };
+  const side = paintTexture(512, 256, (g, W, H) => {
+    g.fillStyle = "#cfae5e";
+    g.fillRect(0, 0, W, H);
+    // wrapped round the cylinder: u runs round it, so the straws run along u
+    straw(g, 900, () => {
+      const y = r() * H;
+      const x = r() * W;
+      const len = 30 + r() * 90;
+      g.moveTo(x, y);
+      g.lineTo(x + len, y + (r() - 0.5) * 7);
+    });
+  });
+  side.wrapS = THREE.RepeatWrapping;
+  side.repeat.set(3, 1);
+  const end = paintTexture(256, 256, (g, W) => {
+    g.fillStyle = "#c6a253";
+    g.fillRect(0, 0, W, W);
+    const c = W / 2;
+    straw(g, 520, () => {
+      const rad = 6 + Math.pow(r(), 0.7) * (c - 8);
+      const a = r() * Math.PI * 2;
+      g.arc(c, c, rad, a, a + 0.25 + r() * 0.8);
+    });
+    const shade = g.createRadialGradient(c, c, 4, c, c, c);
+    shade.addColorStop(0, "rgba(70,45,10,0.45)");
+    shade.addColorStop(0.25, "rgba(70,45,10,0.05)");
+    shade.addColorStop(1, "rgba(70,45,10,0.22)");
+    g.fillStyle = shade;
+    g.fillRect(0, 0, W, W);
+  });
+  baleMaps = { side, end };
+  return baleMaps;
+}
+
 /** A round bale, wrapped in string. */
 function HayBale({ position, spin = 0 }: { position: [number, number, number]; spin?: number }) {
-  const mats = useMemo(
-    () => ({
-      hay: new THREE.MeshStandardMaterial({ color: "#c9ab63", roughness: 1 }),
-      end: new THREE.MeshStandardMaterial({ color: "#b0904d", roughness: 1 }),
-      string: new THREE.MeshStandardMaterial({ color: "#8b7a52", roughness: 0.9 }),
-    }),
-    []
-  );
+  const mats = useMemo(() => {
+    const maps = hayMaps();
+    return {
+      hay: new THREE.MeshStandardMaterial({ map: maps.side, roughness: 1 }),
+      end: new THREE.MeshStandardMaterial({ map: maps.end, roughness: 1 }),
+      string: new THREE.MeshStandardMaterial({ color: "#3c6fb0", roughness: 0.7 }),
+    };
+  }, []);
+  // Straw sticking out all over it, so the silhouette is not a machined cylinder.
+  const wisps = useMemo(() => {
+    const r = rng(Math.round(position[0] * 100 + position[2] * 7));
+    return Array.from({ length: 46 }, () => {
+      const a = r() * Math.PI * 2;
+      const y = (r() - 0.5) * 0.9;
+      return {
+        pos: [Math.cos(a) * 0.615, y, Math.sin(a) * 0.615] as [number, number, number],
+        rot: [(r() - 0.5) * 1.2, -a, Math.PI / 2 + (r() - 0.5) * 1.1] as [number, number, number],
+        len: 0.1 + r() * 0.16,
+      };
+    });
+  }, [position]);
+  const wispGeo = useMemo(() => new THREE.CylinderGeometry(0.004, 0.006, 1, 4).translate(0, 0.5, 0), []);
+  const wispMat = useMemo(() => new THREE.MeshStandardMaterial({ color: "#e2c878", roughness: 1 }), []);
   return (
     <group position={position} rotation={[0, spin, Math.PI / 2]}>
       <mesh castShadow receiveShadow material={mats.hay}>
-        <cylinderGeometry args={[0.62, 0.62, 0.95, 22]} />
+        <cylinderGeometry args={[0.62, 0.62, 0.95, 28, 1, true]} />
       </mesh>
-      {[-0.481, 0.481].map((y) => (
-        <mesh key={y} position={[0, y, 0]} rotation={[-Math.PI / 2, 0, 0]} material={mats.end}>
-          <circleGeometry args={[0.6, 22]} />
+      {[-0.475, 0.475].map((y) => (
+        <mesh key={y} position={[0, y, 0]} rotation={[y > 0 ? -Math.PI / 2 : Math.PI / 2, 0, 0]} material={mats.end} castShadow>
+          <circleGeometry args={[0.62, 28]} />
         </mesh>
       ))}
-      {[-0.28, 0, 0.28].map((y) => (
+      {[-0.26, 0.26].map((y) => (
         <mesh key={y} position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]} material={mats.string}>
-          <torusGeometry args={[0.625, 0.012, 6, 24]} />
+          <torusGeometry args={[0.624, 0.01, 6, 28]} />
         </mesh>
+      ))}
+      {wisps.map((w, i) => (
+        <mesh key={i} geometry={wispGeo} material={wispMat} position={w.pos} rotation={w.rot} scale={[1, w.len, 1]} />
       ))}
     </group>
   );
 }
 
-/** Low rolling ground on the horizon, so the field does not end in a hard line. */
+/**
+ * The country beyond the wall, in three depths: rolling pasture close in,
+ * dotted with trees and hedges; darker wooded hills behind it; and a blue
+ * ridge on the horizon. Depth in a landscape is mostly things getting bluer
+ * and plainer with distance, and one ring of identical green lumps had none.
+ *
+ * Everything here starts well outside the stone wall. The old hills were up to
+ * fifty metres across and only seventy out, so their skirts came up through
+ * the field inside the fence as dark wedges of nothing.
+ */
 function Hills() {
   // `smooth` welds the icosahedron before displacing it, so a hill is a rolling
   // shape and not a heap of triangles.
-  const geos = useMemo(() => [1, 2, 3].map((i) => lumpGeometry(880 + i, 1, 0.26, 3, true)), []);
-  const mat = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: "#688550", roughness: 1 }),
+  const geos = useMemo(() => [1, 2, 3].map((i) => lumpGeometry(880 + i, 1, 0.22, 3, true)), []);
+  const mats = useMemo(
+    () => ({
+      near: ["#7fb04f", "#8fb955", "#6fa64a"].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })),
+      mid: ["#5b9050", "#4f8650"].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })),
+      far: new THREE.MeshBasicMaterial({ color: "#8fb4d4" }),
+      wood: new THREE.MeshStandardMaterial({ color: "#3f7438", roughness: 1 }),
+    }),
     []
   );
-  const spots = useMemo(() => {
+  const { near, mid, far, copses } = useMemo(() => {
     const r = rng(9);
-    return Array.from({ length: 22 }, (_, i) => {
-      const a = (i / 22) * Math.PI * 2 + r() * 0.2;
-      const d = 72 + r() * 34;
-      return {
-        x: Math.cos(a) * d,
-        z: Math.sin(a) * d,
-        w: 22 + r() * 30,
-        h: 5 + r() * 9,
-        k: i % 3,
-      };
-    });
+    const ring = (n: number, d0: number, d1: number, w0: number, w1: number, h0: number, h1: number) =>
+      Array.from({ length: n }, (_, i) => {
+        const a = (i / n) * Math.PI * 2 + r() * 0.25;
+        const d = d0 + r() * (d1 - d0);
+        return { x: Math.cos(a) * d, z: Math.sin(a) * d, w: w0 + r() * (w1 - w0), h: h0 + r() * (h1 - h0), k: i % 3 };
+      });
+    const near = ring(16, 88, 112, 24, 38, 7, 13);
+    const mid = ring(14, 135, 165, 34, 56, 16, 30);
+    const far = ring(12, 215, 250, 50, 90, 38, 70);
+    // Trees on the near hills, as dark blobs sat on the slope: at this range a
+    // wood is a texture, and it is what gives the hills a sense of size.
+    const copses: Placement[] = [];
+    for (const hill of near) {
+      for (let i = 0; i < 9; i++) {
+        const a = r() * Math.PI * 2;
+        const u = Math.sqrt(r()) * 0.78;
+        const dx = Math.cos(a) * u;
+        const dz = Math.sin(a) * u;
+        const y = hill.h * (Math.sqrt(Math.max(0, 1 - dx * dx - dz * dz)) * 0.87 - 0.25);
+        if (y < 0.5) continue;
+        const s = 1.6 + r() * 2.2;
+        copses.push({ pos: [hill.x + dx * hill.w, y + s * 0.3, hill.z + dz * hill.w * 0.8], rot: [0, r() * 6.3, 0], scale: [s * 1.2, s, s * 1.2] });
+      }
+    }
+    return { near, mid, far, copses };
   }, []);
+  const copseGeo = useMemo(() => foliageGeometry(4321, 1), []);
+
   return (
     <group>
-      {spots.map((s, i) => (
-        <mesh
-          key={i}
-          geometry={geos[s.k]}
-          material={mat}
-          position={[s.x, -s.h * 0.25, s.z]}
-          scale={[s.w, s.h, s.w * 0.8]}
-        />
+      {near.map((s, i) => (
+        <mesh key={`n${i}`} geometry={geos[s.k]} material={mats.near[i % 3]} position={[s.x, -s.h * 0.25, s.z]} scale={[s.w, s.h, s.w * 0.8]} />
       ))}
+      {mid.map((s, i) => (
+        <mesh key={`m${i}`} geometry={geos[s.k]} material={mats.mid[i % 2]} position={[s.x, -s.h * 0.25, s.z]} scale={[s.w, s.h, s.w * 0.8]} />
+      ))}
+      {far.map((s, i) => (
+        <mesh key={`f${i}`} geometry={geos[s.k]} material={mats.far} position={[s.x, -s.h * 0.3, s.z]} scale={[s.w, s.h, s.w * 0.8]} />
+      ))}
+      <InstancedGroup geometry={copseGeo} material={mats.wood} items={copses} />
     </group>
   );
 }

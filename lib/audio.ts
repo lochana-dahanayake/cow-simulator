@@ -4,11 +4,41 @@
 
 let ctx: AudioContext | null = null;
 
+const MUTE_KEY = "the-cow:muted:v1";
+let muted = false;
+try {
+  muted = typeof window !== "undefined" && window.localStorage.getItem(MUTE_KEY) === "1";
+} catch {
+  // storage blocked: sound just starts on
+}
+
+export function isMuted(): boolean {
+  return muted;
+}
+
+/**
+ * Silence is done by suspending the whole context rather than gating every
+ * effect: sounds are scheduled on the context clock, so a suspended context
+ * plays nothing and picks up again where it left off.
+ */
+export function setMuted(m: boolean) {
+  muted = m;
+  try {
+    window.localStorage.setItem(MUTE_KEY, m ? "1" : "0");
+  } catch {
+    // not remembered; fine
+  }
+  if (!ctx) return;
+  if (m) void ctx.suspend();
+  else void ctx.resume();
+}
+
 export function ensureAudio(): AudioContext {
   if (!ctx) {
     ctx = new AudioContext();
+    if (muted) void ctx.suspend();
   }
-  if (ctx.state === "suspended") {
+  if (!muted && ctx.state === "suspended") {
     ctx.resume();
   }
   return ctx;
@@ -464,4 +494,60 @@ export function fanfare() {
     o.start(t);
     o.stop(t + 0.95);
   });
+}
+
+/** A hard skull on a hollow plastic door: a short, boxy thump. */
+export function knock() {
+  const c = ensureAudio();
+  const t0 = now(c);
+  const o = c.createOscillator();
+  o.type = "triangle";
+  o.frequency.setValueAtTime(210, t0);
+  o.frequency.exponentialRampToValueAtTime(90, t0 + 0.09);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.5, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.13);
+  o.connect(g).connect(c.destination);
+  o.start(t0);
+  o.stop(t0 + 0.15);
+}
+
+/** Shaped noise through a filter: the raw material for a snort and for leaves. */
+function hiss(seconds: number, shape: (u: number) => number) {
+  const c = ensureAudio();
+  const len = Math.floor(c.sampleRate * seconds);
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * shape(i / len);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  return { c, src, t0: now(c) };
+}
+
+/** The bull's whole contribution to the conversation: air, down the nose. */
+export function snort() {
+  const { c, src, t0 } = hiss(0.45, (u) => Math.pow(1 - u, 1.5));
+  const f = c.createBiquadFilter();
+  f.type = "bandpass";
+  f.frequency.setValueAtTime(900, t0);
+  f.frequency.exponentialRampToValueAtTime(260, t0 + 0.4);
+  f.Q.value = 1.4;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(0.5, t0 + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.45);
+  src.connect(f).connect(g).connect(c.destination);
+  src.start(t0);
+}
+
+/** Leaves, shaken. */
+export function rustle() {
+  const { c, src, t0 } = hiss(0.6, (u) => Math.sin(u * Math.PI) * (0.6 + 0.4 * Math.sin(u * 90)));
+  const f = c.createBiquadFilter();
+  f.type = "highpass";
+  f.frequency.value = 2600;
+  const g = c.createGain();
+  g.gain.value = 0.16;
+  src.connect(f).connect(g).connect(c.destination);
+  src.start(t0);
 }
