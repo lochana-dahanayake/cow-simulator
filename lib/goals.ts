@@ -23,7 +23,10 @@ export type GoalId =
   | "bowl"
   | "herd"
   | "police"
-  | "wanted";
+  | "wanted"
+  | "bull"
+  | "loo"
+  | "apple";
 
 export interface Goal {
   id: GoalId;
@@ -48,6 +51,9 @@ export const GOALS: Goal[] = [
   { id: "herd", title: "Herd a sheep into the pen", hint: "They run from you. Use that." },
   { id: "police", title: "Make the cow call the police", hint: "Slap it until it has had enough." },
   { id: "wanted", title: "Become the most wanted cow", hint: "Three speeding tickets." },
+  { id: "bull", title: "Introduce yourself to the bull", hint: "He has a paddock by the wall. Moo at him." },
+  { id: "loo", title: "Free up the portaloo", hint: "Behind the station. Knock until it works." },
+  { id: "apple", title: "Discover gravity", hint: "There is an apple tree. Use your head." },
 ];
 
 const KEY = "the-cow:goals:v1";

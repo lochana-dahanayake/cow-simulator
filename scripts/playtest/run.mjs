@@ -35,5 +35,10 @@ for (let i = 0; i < parts.length; i += 2) {
   const name = parts[i + 1];
   if (name) await page.screenshot({ path: path.join(outDir, name + ".png") });
 }
+const snaps = await page.evaluate(() => { const s = window.__snaps || {}; window.__snaps = {}; return s; });
+for (const [name, url] of Object.entries(snaps)) {
+  if (!url.startsWith("data:")) { console.log("[snap failed]", name, url); continue; }
+  fs.writeFileSync(path.join(outDir, name + ".jpg"), Buffer.from(url.split(",")[1], "base64"));
+}
 console.log("shots in", outDir);
 await br.close();

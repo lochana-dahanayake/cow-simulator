@@ -11,4 +11,7 @@ window.key = (code, down = true) => window.dispatchEvent(new KeyboardEvent(down 
 window.tap = async (code) => { key(code); await sleep(60); key(code, false); };
 window.S = () => { const s = __cowStore(); return { gag: s.activeGag, prompt: s.prompt && s.prompt.label, say: s.dialogue, gate: s.gateOpen, eaten: s.grassEatenAt.map(v => v ? 1 : 0).join(""), slap: s.slapCount, cut: s.inCutscene }; };
 window.C = () => { const c = __cow.cowState ?? __cow; return [+(c.x).toFixed(2), +(c.z).toFixed(2), +(c.facing).toFixed(2), +(c.speed).toFixed(2)]; };
+// snap(name): grab the 3D canvas at this exact moment (page screenshots take a second or two, too slow to catch a gag mid-flight)
+window.__snaps = window.__snaps || {};
+window.snap = (name) => { try { __cowScene.advance(performance.now(), true); __snaps[name] = __cowScene.gl.domElement.toDataURL("image/jpeg", 0.82); } catch (e) { __snaps[name] = "ERR " + e; } };
 if (!window.__pump) window.__pump = setInterval(() => { try { __cowScene.advance(performance.now(), true); } catch (e) {} }, 16);

@@ -33,5 +33,6 @@ the 3D scene.
 - Movement follows the camera: forward is `(-sin yaw, -cos yaw)`.
 
 `lib.js` gives you `tp(x, z, yaw, pitch, dist, facing)`, `key`, `tap`,
-`sleep`, `S()` (store summary) and `C()` (cow position). See
+`sleep`, `S()` (store summary), `C()` (cow position) and `snap(name)` (saves the
+3D canvas as name.jpg at that exact moment; page screenshots lag by a second or two). See
 `example-bull-and-loo.js`.

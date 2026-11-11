@@ -525,7 +525,8 @@ export const useCowStore = create<CowStore>((set, get) => {
 
       // Boxes on the list. A gag ticks its box when its payoff lands rather
       // than when the button goes down, so the chime arrives with the joke.
-      const goal = GAG_GOALS[id];
+      // a bellow is one gag aimed at two things: mooing at the bull must not tick the scarecrow's box
+      const goal: GoalId | undefined = id === "bellow" ? (target === "bull" ? "bull" : "scare") : GAG_GOALS[id];
       if (goal) timeouts.push(setTimeout(() => get().complete(goal), Math.min(1500, duration * 0.4)));
       if (id === "slap") timeouts.push(setTimeout(() => get().complete("finger"), 1300));
       if (id === "shy") {
@@ -548,7 +549,11 @@ export const useCowStore = create<CowStore>((set, get) => {
             if (target === "apple") {
               rustle();
               set({ shakeSeq: get().shakeSeq + 1 });
-            } else set({ looSeq: get().looSeq + 1 });
+              get().complete("apple");
+            } else {
+              set({ looSeq: get().looSeq + 1 });
+              if (get().looSeq >= 3) get().complete("loo");
+            }
           }
           if (step.say || step.pool) {
             // the slap's comeback gets nastier with every slap

@@ -288,15 +288,74 @@ function GrassField({ count = 34000 }: { count?: number }) {
   );
 }
 
+/**
+ * One flower: a thin stem, `petals` petals fanned round a tilted head, and a
+ * domed centre. Built by hand as a single indexed mesh with vertex colours, so
+ * a whole meadow of them is still one draw call per kind.
+ */
+function flowerGeometry(petal: string, centre: string, petals: number, radius: number) {
+  const pos: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  const c = new THREE.Color();
+  const push = (x: number, y: number, z: number, hex: string, shade = 1) => {
+    c.set(hex).multiplyScalar(shade);
+    pos.push(x, y, z);
+    col.push(c.r, c.g, c.b);
+    return pos.length / 3 - 1;
+  };
+  const H = 0.27;
+  // stem: a three-sided sliver
+  const stem = "#4f8a2c";
+  const sr = 0.008;
+  const base: number[] = [];
+  const top: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    base.push(push(Math.cos(a) * sr, 0, Math.sin(a) * sr, stem, 0.8));
+    top.push(push(Math.cos(a) * sr, H, Math.sin(a) * sr, stem));
+  }
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3;
+    idx.push(base[i], top[i], top[j], base[i], top[j], base[j]);
+  }
+  // petals: each a little kite, lifting toward its tip
+  for (let i = 0; i < petals; i++) {
+    const a = (i / petals) * Math.PI * 2;
+    const w = (Math.PI / petals) * 0.82;
+    const root = push(Math.cos(a) * radius * 0.16, H, Math.sin(a) * radius * 0.16, petal, 0.9);
+    const l = push(Math.cos(a - w) * radius * 0.68, H + 0.012, Math.sin(a - w) * radius * 0.68, petal);
+    const rr = push(Math.cos(a + w) * radius * 0.68, H + 0.012, Math.sin(a + w) * radius * 0.68, petal);
+    const tip = push(Math.cos(a) * radius, H + 0.02, Math.sin(a) * radius, petal);
+    idx.push(root, l, rr, l, tip, rr);
+  }
+  // centre: a low dome
+  const apex = push(0, H + radius * 0.3, 0, centre);
+  const ring: number[] = [];
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2;
+    ring.push(push(Math.cos(a) * radius * 0.3, H + 0.004, Math.sin(a) * radius * 0.3, centre, 0.82));
+  }
+  for (let i = 0; i < 7; i++) idx.push(apex, ring[(i + 1) % 7], ring[i]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 /** Buttercups and daisies, scattered where the grass is thickest. */
 function Flowers() {
-  const geo = useMemo(() => new THREE.SphereGeometry(0.048, 6, 5), []);
-  const white = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: "#f6f2e2", roughness: 0.8 }),
+  // A flower is a stem, a ring of petals and a button in the middle, in one
+  // vertex-coloured mesh. They used to be bare little spheres sitting in the
+  // grass, and the white ones read as pebbles.
+  const [daisy, buttercup] = useMemo(
+    () => [flowerGeometry("#fbf8ee", "#f0b90f", 9, 0.105), flowerGeometry("#f3c61c", "#c98a06", 5, 0.08)],
     []
   );
-  const yellow = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: "#e8c33f", roughness: 0.8 }),
+  const mat = useMemo(
+    () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, side: THREE.DoubleSide }),
     []
   );
 
@@ -311,10 +370,12 @@ function Flowers() {
       const x = Math.cos(a) * d;
       const z = Math.sin(a) * d;
       if (isBare(x, z)) continue;
+      // tipped a little toward the sky in a random direction, so the faces
+      // catch the eye from a walking camera instead of lying edge-on
       const item: Placement = {
-        pos: [x, 0.14 + r() * 0.12, z],
-        rot: [0, r() * Math.PI, 0],
-        scale: [1, 0.55, 1],
+        pos: [x, 0, z],
+        rot: [(r() - 0.5) * 0.5, r() * Math.PI * 2, (r() - 0.5) * 0.5],
+        scale: 0.85 + r() * 0.6,
       };
       (r() > 0.45 ? warm : cool).push(item);
     }
@@ -323,8 +384,8 @@ function Flowers() {
 
   return (
     <group>
-      <InstancedGroup geometry={geo} material={yellow} items={warmSpots} />
-      <InstancedGroup geometry={geo} material={white} items={coolSpots} />
+      <InstancedGroup geometry={buttercup} material={mat} items={warmSpots} />
+      <InstancedGroup geometry={daisy} material={mat} items={coolSpots} />
     </group>
   );
 }
