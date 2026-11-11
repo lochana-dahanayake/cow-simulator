@@ -8,6 +8,7 @@ import { useIsFullscreen, useIsPortrait } from "@/lib/viewport";
 import RotateHint from "./RotateHint";
 import TicketCard from "./TicketCard";
 import { MenuCluster } from "./MenuCluster";
+import { Finale, GoalList, GoalToast } from "./Progress";
 
 export default function HUD() {
   const started = useCowStore((s) => s.started);
@@ -70,6 +71,8 @@ export default function HUD() {
       </div>
 
       <MenuCluster touch={touch} />
+      <GoalList touch={touch} />
+      <GoalToast />
 
       {/* The game holds the mouse by default; this only shows once you've taken
           it back with Esc, to say how to hand it over again. */}
@@ -160,6 +163,8 @@ export default function HUD() {
           <div><b>WASD</b> walk · <b>Shift</b> gallop · <b>mouse</b> look · <b>H</b> all controls</div>
         </div>
       )}
+
+      <Finale />
     </div>
   );
 }

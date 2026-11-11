@@ -262,6 +262,79 @@ export default function PoliceStation() {
           </group>
         ))}
         <NoticeBoard position={[-0.9, 0, 3.55]} mats={mats} />
+
+        {/* window boxes: somebody at this station waters something */}
+        {[-2.1, 2.1].map((z) => (
+          <group key={z} position={[-0.24, 1.22, z]}>
+            <mesh castShadow>
+              <boxGeometry args={[0.24, 0.2, 1.2]} />
+              <meshStandardMaterial color="#9c5a3c" roughness={0.9} />
+            </mesh>
+            {[-0.45, -0.22, 0, 0.22, 0.45].map((o, i) => (
+              <group key={o} position={[0, 0.14, o]}>
+                <mesh scale={[1, 0.8, 1]}>
+                  <icosahedronGeometry args={[0.13, 1]} />
+                  <meshStandardMaterial color={i % 2 ? "#3f8a35" : "#4c9a3c"} roughness={1} flatShading />
+                </mesh>
+                <mesh position={[-0.06, 0.08, i % 2 ? 0.04 : -0.03]}>
+                  <sphereGeometry args={[0.05, 8, 6]} />
+                  <meshStandardMaterial color={["#e5483f", "#f3c61c", "#f08bb0"][i % 3]} roughness={0.7} />
+                </mesh>
+                <mesh position={[0.02, 0.1, i % 2 ? -0.06 : 0.07]}>
+                  <sphereGeometry args={[0.04, 8, 6]} />
+                  <meshStandardMaterial color={["#f3c61c", "#f08bb0", "#e5483f"][i % 3]} roughness={0.7} />
+                </mesh>
+              </group>
+            ))}
+          </group>
+        ))}
+
+        {/* drainpipes down both front corners */}
+        {[-1, 1].map((s) => (
+          <group key={s} position={[-0.09, 0, s * (DEPTH / 2 - 0.22)]}>
+            <mesh position={[0, 0.4 + (WALL - 0.3) / 2, 0]} material={mats.metal} castShadow>
+              <cylinderGeometry args={[0.05, 0.05, WALL - 0.3, 8]} />
+            </mesh>
+            {[0.9, 2.2, 3.4].map((y) => (
+              <mesh key={y} position={[0.03, y, 0]} material={mats.navy}>
+                <boxGeometry args={[0.1, 0.06, 0.14]} />
+              </mesh>
+            ))}
+          </group>
+        ))}
+
+        {/* a bench for people waiting to be ignored */}
+        <group position={[-0.5, 0.4, -2.1]}>
+          <mesh position={[0, 0.3, 0]} castShadow>
+            <boxGeometry args={[0.42, 0.06, 1.5]} />
+            <meshStandardMaterial map={mats.door.map} color="#8a6a48" roughness={0.8} />
+          </mesh>
+          <mesh position={[0.2, 0.62, 0]} rotation={[0, 0, -0.14]} castShadow>
+            <boxGeometry args={[0.05, 0.4, 1.5]} />
+            <meshStandardMaterial map={mats.door.map} color="#8a6a48" roughness={0.8} />
+          </mesh>
+          {[-0.62, 0.62].map((z) => (
+            <mesh key={z} position={[0, 0.14, z]} material={mats.metal} castShadow>
+              <boxGeometry args={[0.38, 0.3, 0.06]} />
+            </mesh>
+          ))}
+        </group>
+
+        {/* the wheelie bin, and a mat nobody wipes their hooves on */}
+        <group position={[-0.5, 0.4, -1.1]} rotation={[0, 0.06, 0]}>
+          <mesh position={[0, 0.45, 0]} castShadow>
+            <boxGeometry args={[0.44, 0.86, 0.4]} />
+            <meshStandardMaterial color="#2f5f43" roughness={0.6} />
+          </mesh>
+          <mesh position={[-0.02, 0.89, 0]} rotation={[0, 0, 0.05]} castShadow>
+            <boxGeometry args={[0.5, 0.07, 0.45]} />
+            <meshStandardMaterial color="#274f38" roughness={0.6} />
+          </mesh>
+        </group>
+        <mesh position={[-1.05, 0.03, 0]} receiveShadow>
+          <boxGeometry args={[0.55, 0.03, 1.1]} />
+          <meshStandardMaterial color="#5b4630" roughness={1} />
+        </mesh>
       </group>
 
       <Officer />

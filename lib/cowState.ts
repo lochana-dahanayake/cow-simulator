@@ -28,6 +28,12 @@ export const cowState = {
   outside: false,
   /** 0 = calm, 1 = just been slapped. Fades out; drives brows, ears and tail. */
   anger: 0,
+  /**
+   * Something on the ground the cow should be standing over with its mouth:
+   * the tuft it is about to eat. Set when a graze starts, so the cow turns to
+   * the grass and steps up to it instead of chewing bare earth a metre away.
+   */
+  aim: null as { x: number; z: number } | null,
 };
 
 /** Shortest-path turn from `from` toward `to`, capped at `maxStep` radians. */

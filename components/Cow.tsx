@@ -613,6 +613,9 @@ function applyPart(obj: THREE.Object3D | undefined, base: Base, delta?: Pose[Par
   obj.scale.set(base.scale[0] + ds[0], base.scale[1] + ds[1], base.scale[2] + ds[2]);
 }
 
+/** How far in front of its own middle the cow's mouth meets the ground when it grazes. */
+const GRAZE_REACH = 1.05;
+
 export default function Cow() {
   const mats = useCowMaterials();
 
@@ -1108,7 +1111,26 @@ export default function Cow() {
       pose = samplePose(gag.keyframes, elapsed);
       // Grazing is a grind, not a nibble: the jaw works the whole time the
       // head is down, and keeps going for a moment after it comes back up.
-      if (activeGag === "eat") chewing = elapsed > 250 ? 1 : 0;
+      if (activeGag === "eat") {
+        chewing = elapsed > 250 ? 1 : 0;
+        // Turn to the tuft and shuffle up until the mouth is over it. The
+        // prompt reaches further than the neck does, and a cow grazing bare
+        // earth beside the grass it is supposedly eating reads as a bug.
+        const aim = cowState.aim;
+        if (aim && elapsed < 900) {
+          const ax = aim.x - cowState.x;
+          const az = aim.z - cowState.z;
+          const ad = Math.hypot(ax, az);
+          if (ad > 0.05) {
+            cowState.facing = turnToward(cowState.facing, Math.atan2(ax, az), 5 * dt);
+            const off = ad - GRAZE_REACH;
+            const stepLen = Math.sign(off) * Math.min(Math.abs(off), 1.3 * dt);
+            cowState.x += (ax / ad) * stepLen;
+            cowState.z += (az / ad) * stepLen;
+            if (Math.abs(off) > 0.02) cowState.speed = 0.9;
+          }
+        }
+      }
       // A middle finger has to be pointed at somebody. Once the cow has finished
       // recoiling it squares up with the lens — the same trick the kiss uses,
       // and for the same reason: without it the whole gag plays to the back of
@@ -1752,7 +1774,7 @@ function drive(dt: number, now: number, grassEatenAt: (number | null)[]): Pose {
       onProp = true;
       kickSpring(cowPhysics.shoveZ, 0.4 * gait);
       kickSpring(cowPhysics.headPitch, 1.6 * gait);
-      if (impact >= BONK_SPEED) bonked();
+      if (impact >= BONK_SPEED && solid.hard) bonked();
     }
     cowState.speed *= 0.45;
   } else {

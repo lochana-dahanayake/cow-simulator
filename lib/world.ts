@@ -140,6 +140,8 @@ export interface Solid {
    * body is still held off it, but the nose is not (see `resolveNose`).
    */
   low?: boolean;
+  /** Soft-edged: stops the cow, but running into it is not a bonk. The pond. */
+  soft?: boolean;
 }
 
 export const SCARECROW = { x: -4.6, z: 13.8 };
@@ -273,7 +275,7 @@ export const SOLIDS: Solid[] = [
   // The pond. It used to be walkable — a cow strolling across the top of the
   // water — and the lane now points straight at it. Held off at the bank, the
   // head still reaches over the water to drink (the prompt reaches further).
-  { x: POND.x, z: POND.z, r: POND.r + 0.15, low: true },
+  { x: POND.x, z: POND.z, r: POND.r + 0.15, low: true, soft: true },
   { x: PORTALOO.x, z: PORTALOO.z, r: 0.75 + COW_GIRTH },
   { x: APPLE_TREE.x, z: APPLE_TREE.z, r: 0.38 + COW_GIRTH },
   { x: SIGNPOST.x, z: SIGNPOST.z, r: 0.5 },
@@ -329,8 +331,10 @@ function pushOutOfBox(b: Box, x: number, z: number, shrink = 0): { x: number; z:
  * position and whether anything was actually hit, so the caller can thump the
  * springs once per contact rather than every frame.
  */
-export function resolveSolids(x: number, z: number): { x: number; z: number; hit: boolean } {
+export function resolveSolids(x: number, z: number): { x: number; z: number; hit: boolean; hard: boolean } {
   let hit = false;
+  // whether any of it was something you could knock yourself out on
+  let hard = false;
   for (const s of SOLIDS) {
     const dx = x - s.x;
     const dz = z - s.z;
@@ -342,6 +346,7 @@ export function resolveSolids(x: number, z: number): { x: number; z: number; hit
       x = s.x + nx * s.r;
       z = s.z + nz * s.r;
       hit = true;
+      if (!s.soft) hard = true;
     }
   }
   for (const b of BOXES) {
@@ -349,8 +354,9 @@ export function resolveSolids(x: number, z: number): { x: number; z: number; hit
     x = out.x;
     z = out.z;
     hit = hit || out.hit;
+    hard = hard || out.hit;
   }
-  return { x, z, hit };
+  return { x, z, hit, hard };
 }
 
 /** How far ahead of its own centre the cow's head is. */

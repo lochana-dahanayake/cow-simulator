@@ -40,6 +40,7 @@ import {
   type BoneName,
 } from "@/lib/officerBody";
 import { OFFICER, STATION } from "@/lib/world";
+import { cowState } from "@/lib/cowState";
 
 const lin = (hex: string) => {
   const c = new THREE.Color(hex);
@@ -185,6 +186,8 @@ export default function Officer() {
   const donut = useMemo(() => donutGeo(), []);
 
   const outerRef = useRef<THREE.Group>(null);
+  /** How far round he has turned to keep the cow in view: feet, then head on top. */
+  const watch = useRef({ body: 0, head: 0 });
   const rootRef = useRef<THREE.Group>(null);
   const hipsRef = useRef<THREE.Group>(null);
   const chestRef = useRef<THREE.Group>(null);
@@ -298,6 +301,28 @@ export default function Officer() {
       } else {
         headRef.current.rotation.x = 0.06 + Math.sin(t * 0.6) * 0.04;
         headRef.current.rotation.y = Math.sin(t * 0.29) * 0.32;
+      }
+    }
+
+    // He keeps an eye on the cow. Not a keen eye: the feet shuffle round a
+    // little way and the head does the rest, and past a certain angle he
+    // simply stops bothering. Nothing about him used to move from the spot,
+    // which read as a statue with a doughnut.
+    {
+      const dxc = cowState.x - OFFICER.x;
+      const dzc = cowState.z - OFFICER.z;
+      const near = Math.hypot(dxc, dzc) < 13;
+      let rel = Math.atan2(dxc, dzc) + Math.PI / 2;
+      rel = ((((rel + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+      const w = watch.current;
+      const bodyWant = near ? Math.max(-0.95, Math.min(0.95, rel * 0.6)) : 0;
+      w.body += (bodyWant - w.body) * Math.min(1, dt * 1.6);
+      if (outerRef.current) outerRef.current.rotation.y = -Math.PI / 2 + w.body;
+      const headWant = near ? Math.max(-0.85, Math.min(0.85, rel - w.body)) : 0;
+      w.head += (headWant - w.head) * Math.min(1, dt * 4);
+      if (headRef.current && near && yawn <= 0.02) {
+        // his own idle look-about shrinks to a twitch while he has something to look at
+        headRef.current.rotation.y = w.head + headRef.current.rotation.y * 0.25;
       }
     }
 

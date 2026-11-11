@@ -375,7 +375,7 @@ function Flowers() {
       const item: Placement = {
         pos: [x, 0, z],
         rot: [(r() - 0.5) * 0.5, r() * Math.PI * 2, (r() - 0.5) * 0.5],
-        scale: 0.85 + r() * 0.6,
+        scale: 0.5 + r() * 0.4,
       };
       (r() > 0.45 ? warm : cool).push(item);
     }

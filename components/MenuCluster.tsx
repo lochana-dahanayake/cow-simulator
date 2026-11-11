@@ -14,6 +14,7 @@ const DESKTOP_CONTROLS: [string, string][] = [
   ["Q", "Pet"],
   ["F", "Slap"],
   ["R", "Dance"],
+  ["Tab", "The to-do list"],
   ["M", "Sound on / off"],
   ["H", "This card"],
 ];

@@ -3,7 +3,9 @@ import {
   bonk,
   chew,
   creak,
+  ding,
   ensureAudio,
+  fanfare,
   isMuted,
   setMuted,
   grunt,
@@ -20,7 +22,7 @@ import {
 import { currentDance, startDance } from "./mocap";
 import { infoFor } from "./danceInfo";
 import { gags, KISS_CONTACT, LIP_MARK_DURATION, pick, pickLine, SLAP_IMPACT, type LinePool } from "./reactions";
-import { loadGoals, saveGoals, type GoalId } from "./goals";
+import { GOALS, loadGoals, saveGoals, type GoalId } from "./goals";
 import { noteInput } from "./input";
 import { kissImpulse, slapImpulse } from "./physics";
 import { addShake, cam } from "./camera";
@@ -127,6 +129,12 @@ export interface CowStore {
   muted: boolean;
   /** The controls card is open. */
   helpOpen: boolean;
+  /** The most recent tick, for the toast. Bumped seq replays the animation. */
+  toast: { id: GoalId; seq: number } | null;
+  /** Whether the to-do list is open. */
+  listOpen: boolean;
+  /** Everything ticked off: the ending card is up. */
+  finale: boolean;
   /** Running totals for the ending card. */
   stats: { slaps: number; bonks: number; sheep: number; kisses: number; startedAt: number; endedAt: number };
 
@@ -142,6 +150,9 @@ export interface CowStore {
   fileTicket: (photo: string) => void;
   dismissTicket: () => void;
   complete: (id: GoalId) => void;
+  toggleList: (open?: boolean) => void;
+  closeFinale: () => void;
+  resetGoals: () => void;
   toggleMute: () => void;
   toggleHelp: (open?: boolean) => void;
   chat: () => void;
@@ -248,6 +259,9 @@ export const useCowStore = create<CowStore>((set, get) => {
     done: loadGoals(),
     muted: false,
     helpOpen: false,
+    toast: null,
+    listOpen: false,
+    finale: false,
     chatting: false,
     stats: { slaps: 0, bonks: 0, sheep: 0, kisses: 0, startedAt: 0, endedAt: 0 },
 
@@ -258,6 +272,10 @@ export const useCowStore = create<CowStore>((set, get) => {
       ensureAudio();
       noteInput();
       set({ muted: isMuted(), started: true, stats: { ...get().stats, startedAt: performance.now() } });
+      // Show the list once, on the way in, so a first-time player knows there
+      // is one; then get out of the way.
+      later("peek", 1400, () => set({ listOpen: true }));
+      later("unpeek", 8200, () => set({ listOpen: false }));
     },
 
     say: (line, speaker = "cow") => set({ dialogue: line, speaker }),
@@ -297,6 +315,8 @@ export const useCowStore = create<CowStore>((set, get) => {
           eaten[p.id] = Date.now();
           set({ grassEatenAt: eaten, nearGrass: null, prompt: null });
           timeouts.push(setTimeout(() => get().regrow(p.id), REGROW_MS));
+          const spot = GRASS.find((g) => g.id === p.id);
+          cowState.aim = spot ? { x: spot.x, z: spot.z } : null;
           get().triggerGag("eat");
           return;
         }
@@ -461,7 +481,26 @@ export const useCowStore = create<CowStore>((set, get) => {
       if (s.done[id]) return;
       const done = { ...s.done, [id]: Date.now() };
       saveGoals(done);
-      set({ done });
+      ding();
+      set({ done, toast: { id, seq: (s.toast?.seq ?? 0) + 1 } });
+      later("toast", 3600, () => set({ toast: null }));
+      if (GOALS.every((g) => done[g.id])) {
+        later("finale", 2600, () => {
+          fanfare();
+          set({ finale: true, listOpen: false, stats: { ...get().stats, endedAt: performance.now() } });
+          // the cow knows what to do
+          if (!get().activeGag && !get().inCutscene) get().toggleDance();
+        });
+      }
+    },
+
+    toggleList: (open) => set({ listOpen: open ?? !get().listOpen }),
+
+    closeFinale: () => set({ finale: false }),
+
+    resetGoals: () => {
+      saveGoals({});
+      set({ done: {}, finale: false, toast: null });
     },
 
     toggleMute: () => {

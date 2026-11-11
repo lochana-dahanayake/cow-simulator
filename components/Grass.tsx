@@ -36,6 +36,10 @@ const CLUMP = (() => {
   });
 })();
 
+/** When, after E, the first mouthful comes off the tuft and when the last one does (ms). */
+const BITE_START = 1000;
+const BITE_END = 3300;
+
 export default function GrassPatches() {
   const eaten = useCowStore((s) => s.grassEatenAt);
   const nearGrass = useCowStore((s) => s.nearGrass);
@@ -107,6 +111,11 @@ function Tuft({
     if (eatenAt !== null) {
       const age = Date.now() - eatenAt;
       grown = Math.max(0.001, Math.min(1, (age - REGROW_MS * 0.45) / (REGROW_MS * 0.55)));
+      // It is eaten a mouthful at a time, starting once the head has got down
+      // to it. It used to vanish on the frame E was pressed, a full second
+      // before the cow had lowered its head, leaving it grazing bare earth.
+      if (age < BITE_START) grown = 1;
+      else if (age < BITE_END) grown = Math.max(grown, 1 - Math.ceil(((age - BITE_START) / (BITE_END - BITE_START)) * 4) / 4);
       if (age > REGROW_MS) useCowStore.getState().regrow(id);
     }
 
